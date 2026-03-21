@@ -2,6 +2,7 @@
 
 - Maintain this repository as a Django web app for automated posting from Google Drive to separate Facebook pages and Instagram profiles.
 - Update `SOCIAL_POSTER.md` after every meaningful change in the project.
+- After every meaningful project change, update `SOCIAL_POSTER.md` and push the latest code to GitHub.
 - Preserve these product requirements:
   - Meta access token input through the web UI
   - visible synced Facebook pages and Instagram IDs

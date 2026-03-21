@@ -25,6 +25,7 @@
 - Added exact per-post daily timing support so each target can store one explicit time for every post count selected in the UI.
 - Redesigned Telegram daily reports into a cleaner summary/activity/attention format and added `send_daily_report --date YYYY-MM-DD` for accurate same-day testing.
 - Added `.gitignore` to prevent local secrets, virtualenv files, cached media, database, and service account credentials from being committed before GitHub push.
+- Recorded a global repository rule: after every meaningful change, update `SOCIAL_POSTER.md` and push the latest code to GitHub.
 
 ## Notes
 - Current Instagram flow is MVP-level and supports image publishing only.
