@@ -8,7 +8,7 @@ from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
-from .services.publishing import get_daily_slots, pick_next_shared_file
+from .services.publishing import _platform_already_succeeded_for_file, get_daily_slots, pick_next_shared_file
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 
 
@@ -91,6 +91,7 @@ class SharedQueueTest(TestCase):
         with patch("scheduler.services.publishing.list_folder_files", return_value=files):
             self.assertEqual(pick_next_shared_file(target)["id"], "file1")
             target.post_logs.create(platform="facebook", scheduled_for=get_daily_slots(target)[0], status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
+            self.assertTrue(_platform_already_succeeded_for_file(target, "facebook", "file1"))
             self.assertEqual(pick_next_shared_file(target)["id"], "file1")
             target.post_logs.create(platform="instagram", scheduled_for=get_daily_slots(target)[0], status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
             self.assertEqual(pick_next_shared_file(target)["id"], "file2")

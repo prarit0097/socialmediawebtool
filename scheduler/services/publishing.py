@@ -111,6 +111,14 @@ def pick_next_shared_file(target: PublishingTarget) -> dict:
     raise PublishingError("No publishable image or video files found in the configured Google Drive folder.")
 
 
+def _platform_already_succeeded_for_file(target: PublishingTarget, platform: str, drive_file_id: str) -> bool:
+    return target.post_logs.filter(
+        platform=platform,
+        drive_file_id=drive_file_id,
+        status=PostLog.STATUS_SUCCESS,
+    ).exists()
+
+
 def build_caption(target: PublishingTarget) -> str:
     if target.default_caption.strip():
         return target.default_caption.strip()
@@ -231,6 +239,8 @@ def _wait_for_instagram_container(container_id: str, access_token: str) -> None:
 def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None) -> None:
     scheduled_for = scheduled_for or timezone.now()
     file_obj = pick_next_shared_file(target)
+    if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
+        return
     try:
         ensure_public_file(get_drive_service(), file_obj["id"])
     except Exception:
@@ -259,11 +269,14 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
 def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
     scheduled_for = scheduled_for or timezone.now()
     failures = []
-    successes = 0
+    attempted = 0
+    file_obj = pick_next_shared_file(target)
     for platform in _active_platforms(target):
+        if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
+            continue
         try:
             publish_platform(target, platform, scheduled_for=scheduled_for)
-            successes += 1
+            attempted += 1
         except Exception as exc:
             failures.append(f"{platform}: {exc}")
 
@@ -271,8 +284,9 @@ def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
         target.last_status = "failed"
         target.last_error = " | ".join(failures)
         target.save(update_fields=["last_status", "last_error", "updated_at"])
-        if successes == 0:
-            raise PublishingError(target.last_error)
+        raise PublishingError(target.last_error)
+
+    if attempted == 0:
         return
 
     target.last_posted_at = timezone.now()

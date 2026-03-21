@@ -78,7 +78,11 @@ def target_detail(request, pk):
         if action == "test_post":
             try:
                 publish_target_now(target)
-                messages.success(request, "Test post completed.")
+                target.refresh_from_db(fields=["last_status", "last_error"])
+                if target.last_status == "success":
+                    messages.success(request, "Test post completed successfully on all active platforms.")
+                else:
+                    messages.warning(request, f"Test post ran, but some platform still needs attention: {target.last_error}")
             except Exception as exc:
                 messages.error(request, f"Test post failed: {exc}")
             return redirect("scheduler:target_detail", pk=target.pk)

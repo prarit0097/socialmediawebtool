@@ -11,3 +11,4 @@
   - per-row daily posting frequency
   - 9 AM Telegram report of previous-day posting health and counts
 - Prefer implementation choices that can be hardened for production later.
+- When scanning or fixing the app, verify posting flow, report flow, and tests before closing the task.
