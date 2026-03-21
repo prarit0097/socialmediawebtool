@@ -1,0 +1,127 @@
+{% extends "scheduler/base.html" %}
+
+{% block content %}
+<div class="grid">
+    <div class="stack">
+        <section class="card">
+            <h2>Add Meta Token</h2>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="add_token">
+                {{ form.label.label_tag }}
+                {{ form.label }}
+                {{ form.access_token.label_tag }}
+                {{ form.access_token }}
+                <button type="submit">Save token and sync</button>
+            </form>
+        </section>
+        <section class="card">
+            <h3>Quick Actions</h3>
+            <div class="actions">
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="run_due_posts">
+                    <button type="submit">Run due posts now</button>
+                </form>
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="send_report">
+                    <button class="ghost" type="submit">Send yesterday report</button>
+                </form>
+            </div>
+            <p class="muted">Google Drive folder ko configured service account email ke saath share karein, phir folder URL ya ID row level par set karein.</p>
+        </section>
+        <section class="card">
+            <h3>Credentials</h3>
+            <div class="row-list">
+                {% for credential in credentials %}
+                    <div class="target-row">
+                        <strong>{{ credential.label }}</strong>
+                        <div class="target-meta">
+                            <span>{{ credential.user_name|default:"Unknown Meta user" }}</span>
+                            <span>{{ credential.masked_token }}</span>
+                        </div>
+                        {% if credential.last_error %}
+                            <div class="target-meta">
+                                <span>Error: {{ credential.last_error }}</span>
+                            </div>
+                        {% endif %}
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="sync_credential">
+                            <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                            <button class="ghost" type="submit">Sync accounts</button>
+                        </form>
+                        <form method="post" onsubmit="return confirm('Is credential ko permanently delete karna hai?');">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="delete_credential">
+                            <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                            <button class="danger" type="submit">Delete</button>
+                        </form>
+                    </div>
+                {% empty %}
+                    <p class="muted">Abhi koi Meta token configured nahi hai.</p>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+    <div class="stack">
+        <section class="card">
+            <div class="section-title">
+                <h2>Connected Facebook + Instagram</h2>
+                <span class="badge connected">{{ connected_targets|length }} rows</span>
+            </div>
+            <div class="row-list">
+                {% for item in connected_targets %}
+                    <a class="target-row" href="{% url 'scheduler:target_detail' item.target.pk %}">
+                        <strong>{{ item.target.display_name }}</strong>
+                        <div class="target-meta">
+                            <span>FB: {{ item.target.facebook_account.display_name }}</span>
+                            <span>IG: {{ item.target.instagram_account.display_name }}</span>
+                            <span>Posts/day: {{ item.target.posts_per_day }}</span>
+                            <span>Status: {{ item.target.last_status|default:"idle" }}</span>
+                            <span class="badge {{ item.health.overall }}">{{ item.health.overall }}</span>
+                        </div>
+                        <div class="target-meta">
+                            <span>Drive: {{ item.target.drive_folder_id|default:"not set" }}</span>
+                            <span>Files: {{ item.health.file_count }}</span>
+                            <span>Media: {{ item.health.media_count }}</span>
+                            <span>Cached: {{ item.health.cached_asset_count }}</span>
+                        </div>
+                    </a>
+                {% empty %}
+                    <p class="muted">Koi connected FB + IG pair abhi sync nahi hua.</p>
+                {% endfor %}
+            </div>
+        </section>
+        <section class="card">
+            <div class="section-title">
+                <h2>Unconnected Accounts</h2>
+                <span class="badge solo">{{ unconnected_targets|length }} rows</span>
+            </div>
+            <div class="row-list">
+                {% for item in unconnected_targets %}
+                    <a class="target-row" href="{% url 'scheduler:target_detail' item.target.pk %}">
+                        <strong>{{ item.target.display_name }}</strong>
+                        <div class="target-meta">
+                            {% if item.target.facebook_account %}<span>FB only</span>{% endif %}
+                            {% if item.target.instagram_account %}<span>IG only</span>{% endif %}
+                            <span>Posts/day: {{ item.target.posts_per_day }}</span>
+                            <span>Status: {{ item.target.last_status|default:"idle" }}</span>
+                            <span class="badge {{ item.health.overall }}">{{ item.health.overall }}</span>
+                        </div>
+                        <div class="target-meta">
+                            <span>Drive: {{ item.target.drive_folder_id|default:"not set" }}</span>
+                            <span>Files: {{ item.health.file_count }}</span>
+                            <span>Media: {{ item.health.media_count }}</span>
+                            <span>Cached: {{ item.health.cached_asset_count }}</span>
+                        </div>
+                    </a>
+                {% empty %}
+                    <p class="muted">Sab synced assets paired dikh rahe hain ya abhi koi asset available nahi hai.</p>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

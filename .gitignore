@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+db.sqlite3
+.env
+media_cache/
+staticfiles/
+*.log
+tools/ngrok/ngrok-v3-stable-windows-amd64.zip
+meta-autoposter-forvps-b16081004d01.json

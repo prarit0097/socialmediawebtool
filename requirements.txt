@@ -1,0 +1,5 @@
+Django==5.1.7
+requests==2.32.3
+google-api-python-client==2.164.0
+google-auth==2.38.0
+Pillow==11.2.1

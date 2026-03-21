@@ -1,0 +1,143 @@
+{% extends "scheduler/base.html" %}
+
+{% block content %}
+<section class="card" style="max-width: 900px;">
+    <div class="section-title">
+        <h2>{{ target.display_name }}</h2>
+        <a class="badge" href="{% url 'scheduler:dashboard' %}">Back to dashboard</a>
+    </div>
+    <p class="muted">
+        {% if target.facebook_account %}Facebook: {{ target.facebook_account.display_name }}{% endif %}
+        {% if target.instagram_account %} | Instagram: {{ target.instagram_account.display_name }}{% endif %}
+    </p>
+    <p class="muted">Service account email to share on Google Drive: <strong>{{ settings.GOOGLE_SERVICE_ACCOUNT_EMAIL|default:"Set GOOGLE_SERVICE_ACCOUNT_EMAIL in env" }}</strong></p>
+
+    <div class="health-grid" style="margin-bottom: 16px;">
+        <div class="health-tile">
+            <strong>Health</strong>
+            <div class="target-meta" style="margin-top: 8px;">
+                <span class="badge {{ health.overall }}">{{ health.overall }}</span>
+                <span>Files: {{ health.file_count }}</span>
+                <span>Media: {{ health.media_count }}</span>
+                <span>Cached: {{ health.cached_asset_count }}</span>
+            </div>
+        </div>
+        <div class="health-tile">
+            <strong>Caption</strong>
+            <div class="target-meta" style="margin-top: 8px;">
+                <span>{% if health.caption_found %}caption.txt found{% elif target.default_caption %}default caption set{% else %}fallback to filename{% endif %}</span>
+            </div>
+        </div>
+        <div class="health-tile">
+            <strong>Last Status</strong>
+            <div class="target-meta" style="margin-top: 8px;">
+                <span>{{ target.last_status|default:"idle" }}</span>
+                {% if target.last_posted_at %}<span>{{ target.last_posted_at }}</span>{% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if health.issues %}
+        <div class="card" style="padding: 14px; margin-bottom: 16px;">
+            <h3 style="margin-bottom: 8px;">Issues</h3>
+            <ul class="issue-list">
+                {% for issue in health.issues %}
+                    <li>{{ issue }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
+    <div class="actions" style="margin-bottom: 16px;">
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="test_post">
+            <button class="ghost" type="submit">Test Post Now</button>
+        </form>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save">
+        {{ form.drive_folder_url.label_tag }}
+        {{ form.drive_folder_url }}
+        {{ form.drive_folder_id.label_tag }}
+        {{ form.drive_folder_id }}
+        {{ form.posts_per_day.label_tag }}
+        {{ form.posts_per_day }}
+        {{ form.posting_times_json }}
+        <div class="card" style="padding: 14px;">
+            <h3 style="margin-bottom: 8px;">Posting Times</h3>
+            <p class="muted" style="margin-top: 0;">`Posts per day` jitna count hoga, utne exact time inputs yahan aa jayenge.</p>
+            <div id="posting-times-list" class="stack"></div>
+        </div>
+        {{ form.posting_window_start.label_tag }}
+        {{ form.posting_window_start }}
+        {{ form.posting_window_end.label_tag }}
+        {{ form.posting_window_end }}
+        {{ form.default_caption.label_tag }}
+        {{ form.default_caption }}
+        {{ form.is_active.label_tag }}
+        {{ form.is_active }}
+        <button type="submit">Save publishing settings</button>
+    </form>
+
+    <div class="card" style="padding: 14px; margin-top: 16px;">
+        <h3 style="margin-bottom: 8px;">Recent Logs</h3>
+        <ul class="log-list">
+            {% for log in health.latest_logs %}
+                <li>{{ log.platform }} | {{ log.status }} | {{ log.drive_file_name|default:"-" }} | {{ log.message|truncatechars:320 }}</li>
+            {% empty %}
+                <li>No post logs yet.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</section>
+<script>
+(() => {
+    const postsPerDayInput = document.getElementById("id_posts_per_day");
+    const hiddenField = document.getElementById("id_posting_times_json");
+    const list = document.getElementById("posting-times-list");
+    if (!postsPerDayInput || !hiddenField || !list) return;
+
+    let values = [];
+    try {
+        values = JSON.parse(hiddenField.value || "[]");
+    } catch (error) {
+        values = [];
+    }
+
+    const syncHidden = () => {
+        const inputs = list.querySelectorAll("input[type='time']");
+        hiddenField.value = JSON.stringify(Array.from(inputs).map((input) => input.value));
+    };
+
+    const build = () => {
+        const count = Math.max(parseInt(postsPerDayInput.value || "1", 10), 1);
+        list.innerHTML = "";
+        for (let index = 0; index < count; index += 1) {
+            const wrapper = document.createElement("div");
+            wrapper.className = "stack";
+
+            const label = document.createElement("label");
+            label.textContent = `Post ${index + 1} time`;
+            label.setAttribute("for", `posting-time-${index}`);
+
+            const input = document.createElement("input");
+            input.type = "time";
+            input.id = `posting-time-${index}`;
+            input.value = values[index] || "";
+            input.addEventListener("input", syncHidden);
+
+            wrapper.appendChild(label);
+            wrapper.appendChild(input);
+            list.appendChild(wrapper);
+        }
+        syncHidden();
+    };
+
+    postsPerDayInput.addEventListener("input", build);
+    build();
+})();
+</script>
+{% endblock %}
