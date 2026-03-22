@@ -168,3 +168,5 @@ python manage.py run_scheduler
 - `SOCIAL_POSTER.md` ko beginner-friendly format me rewrite kiya gaya so that project ko easily samjha ja sake.
 - Professional `README.md` add ki gayi for GitHub repo overview, setup, commands, and environment configuration.
 - Full app scan kiya gaya, posting flow tighten kiya gaya, aur same file par already-successful platform ko dubara repost karne se roka gaya.
+2026-03-22
+- Scheduler ko single-instance guard diya gaya taaki duplicate/background scheduler processes ki wajah se false alerts ya double runs na aayein.

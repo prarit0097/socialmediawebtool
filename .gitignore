@@ -6,5 +6,6 @@ db.sqlite3
 media_cache/
 staticfiles/
 *.log
+.run_scheduler.lock
 tools/ngrok/ngrok-v3-stable-windows-amd64.zip
 meta-autoposter-forvps-b16081004d01.json
