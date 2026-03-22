@@ -180,3 +180,4 @@ python manage.py run_scheduler
 - Telegram report send logic ko adjust kiya gaya taaki previous day ki manual test/send aaj ke scheduled 9 AM report ko block na kare.
 - Google Drive folder listing me pagination add ki gayi. Ab 100 se zyada files wale folders ka real full count app health aur posting logic me dikhna chahiye.
 - Dashboard top par `Active Scheduling Profiles` section add kiya gaya taaki jo profiles currently scheduling me use ho rahi hain woh sabse upar hi visible rahein.
+- Video posts ke liye caption handling normalize ki gayi aur Facebook video publish payload me `title` bhi add kiya gaya, taaki text/caption visibility zyada consistent rahe.

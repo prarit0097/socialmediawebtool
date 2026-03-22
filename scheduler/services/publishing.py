@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 import time
 
 import requests
@@ -151,7 +152,7 @@ def _slot_is_complete(target: PublishingTarget, scheduled_for, active_platforms:
 
 def build_caption(target: PublishingTarget) -> str:
     if target.default_caption.strip():
-        return target.default_caption.strip()
+        return target.default_caption.strip().replace("\r\n", "\n").replace("\r", "\n")
 
     files = list_folder_files(target.drive_folder_id)
     caption_file = find_caption_file(files)
@@ -160,7 +161,13 @@ def build_caption(target: PublishingTarget) -> str:
 
     response = requests.get(get_publishable_file_url(caption_file), timeout=30)
     response.raise_for_status()
-    return response.text.strip()
+    return response.text.strip().replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _build_media_title(file_obj: dict) -> str:
+    name = file_obj.get("name", "Media")
+    stem = Path(name).stem.strip() or "Media"
+    return stem[:120]
 
 
 def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
@@ -185,6 +192,7 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
                     token,
                     {
                         "file_url": media_url,
+                        "title": _build_media_title(file_obj),
                         "description": caption,
                         "published": "true",
                     },
