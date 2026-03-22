@@ -170,3 +170,4 @@ python manage.py run_scheduler
 - Full app scan kiya gaya, posting flow tighten kiya gaya, aur same file par already-successful platform ko dubara repost karne se roka gaya.
 2026-03-22
 - Scheduler ko single-instance guard diya gaya taaki duplicate/background scheduler processes ki wajah se false alerts ya double runs na aayein.
+- Slot progression logic ko fix kiya gaya taaki `9 AM`, `10 AM` jaise exact times apne-apne slot ke hisaab se hi chalein aur ek slot multiple files kha kar next slot ko confuse na kare.

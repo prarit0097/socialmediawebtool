@@ -90,6 +90,24 @@ def _active_platforms(target: PublishingTarget) -> list[str]:
     return platforms
 
 
+def _get_slot_locked_file(target: PublishingTarget, scheduled_for) -> dict:
+    locked_file_id = (
+        target.post_logs.filter(scheduled_for=scheduled_for)
+        .exclude(drive_file_id="")
+        .order_by("created_at")
+        .values_list("drive_file_id", flat=True)
+        .first()
+    )
+    if not locked_file_id:
+        return pick_next_shared_file(target)
+
+    files = list_folder_files(target.drive_folder_id)
+    for file_obj in files:
+        if file_obj.get("id") == locked_file_id and is_publishable_media(file_obj):
+            return file_obj
+    raise PublishingError("The media file already assigned to this slot is no longer available in Drive.")
+
+
 def pick_next_shared_file(target: PublishingTarget) -> dict:
     files = list_folder_files(target.drive_folder_id)
     media_files = [file_obj for file_obj in files if is_publishable_media(file_obj)]
@@ -117,6 +135,18 @@ def _platform_already_succeeded_for_file(target: PublishingTarget, platform: str
         drive_file_id=drive_file_id,
         status=PostLog.STATUS_SUCCESS,
     ).exists()
+
+
+def _slot_is_complete(target: PublishingTarget, scheduled_for, active_platforms: set[str]) -> bool:
+    if not active_platforms:
+        return False
+    slot_successes = set(
+        target.post_logs.filter(
+            scheduled_for=scheduled_for,
+            status=PostLog.STATUS_SUCCESS,
+        ).values_list("platform", flat=True)
+    )
+    return slot_successes == active_platforms
 
 
 def build_caption(target: PublishingTarget) -> str:
@@ -236,9 +266,9 @@ def _wait_for_instagram_container(container_id: str, access_token: str) -> None:
     raise PublishingError("Instagram container processing timed out before reaching FINISHED.")
 
 
-def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None) -> None:
+def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None, file_obj: dict | None = None) -> None:
     scheduled_for = scheduled_for or timezone.now()
-    file_obj = pick_next_shared_file(target)
+    file_obj = file_obj or _get_slot_locked_file(target, scheduled_for)
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
         return
     try:
@@ -270,12 +300,12 @@ def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
     scheduled_for = scheduled_for or timezone.now()
     failures = []
     attempted = 0
-    file_obj = pick_next_shared_file(target)
+    file_obj = _get_slot_locked_file(target, scheduled_for)
     for platform in _active_platforms(target):
         if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
             continue
         try:
-            publish_platform(target, platform, scheduled_for=scheduled_for)
+            publish_platform(target, platform, scheduled_for=scheduled_for, file_obj=file_obj)
             attempted += 1
         except Exception as exc:
             failures.append(f"{platform}: {exc}")
@@ -315,22 +345,13 @@ def publish_due_targets(reference_time=None) -> dict:
             due_slots = [slot for slot in get_daily_slots(target, now) if slot <= now]
             if not due_slots:
                 continue
-            completed_runs = 0
             active_platforms = set(_active_platforms(target))
-            success_rows = list(
-                target.post_logs.filter(
-                    status=PostLog.STATUS_SUCCESS,
-                    scheduled_for__date=now.date(),
-                )
-                .exclude(drive_file_id="")
-                .values("drive_file_id", "platform")
-            )
-            success_map = {}
-            for row in success_rows:
-                success_map.setdefault(row["drive_file_id"], set()).add(row["platform"])
-            for platforms in success_map.values():
-                if platforms == active_platforms:
+            completed_runs = 0
+            for slot in due_slots:
+                if _slot_is_complete(target, slot, active_platforms):
                     completed_runs += 1
+                else:
+                    break
             published_any = False
             if completed_runs < len(due_slots):
                 publish_target(target, scheduled_for=due_slots[completed_runs])

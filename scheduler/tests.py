@@ -8,7 +8,7 @@ from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
-from .services.publishing import _platform_already_succeeded_for_file, get_daily_slots, pick_next_shared_file
+from .services.publishing import _platform_already_succeeded_for_file, _slot_is_complete, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 
 
@@ -41,6 +41,31 @@ class SchedulingTest(TestCase):
             posting_times=["09:15", "12:30", "18:45"],
         )
         self.assertEqual([slot.strftime("%H:%M") for slot in get_daily_slots(target)], ["09:15", "12:30", "18:45"])
+
+    def test_due_runner_moves_to_next_slot_only_after_current_slot_platforms_succeed(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB")
+        ig = credential.accounts.create(platform="instagram", external_id="ig1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:3|ig:3",
+            display_name="Timed Pair",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posts_per_day=2,
+            posting_times=["09:00", "10:00"],
+        )
+        slots = get_daily_slots(target)
+        target.post_logs.create(platform="facebook", scheduled_for=slots[0], status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
+        target.post_logs.create(platform="instagram", scheduled_for=slots[0], status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
+        self.assertTrue(_slot_is_complete(target, slots[0], {"facebook", "instagram"}))
+
+        with patch("scheduler.services.publishing.publish_target") as publish_target_mock:
+            publish_due_targets(reference_time=slots[1])
+        publish_target_mock.assert_called_once_with(target, scheduled_for=slots[1])
 
 
 class ProxyHelpersTest(TestCase):
