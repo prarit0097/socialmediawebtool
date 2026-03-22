@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 
 import requests
@@ -335,6 +335,7 @@ def publish_target_now(target: PublishingTarget) -> None:
 
 def publish_due_targets(reference_time=None) -> dict:
     now = timezone.localtime(reference_time or timezone.now())
+    catchup_window = timedelta(minutes=settings.SCHEDULER_CATCHUP_MINUTES)
     success = 0
     failed = 0
     targets = PublishingTarget.objects.filter(is_active=True).select_related("credential", "facebook_account", "instagram_account")
@@ -342,7 +343,11 @@ def publish_due_targets(reference_time=None) -> dict:
         try:
             if not target.drive_folder_id:
                 continue
-            due_slots = [slot for slot in get_daily_slots(target, now) if slot <= now]
+            due_slots = [
+                slot
+                for slot in get_daily_slots(target, now)
+                if slot <= now and (now - slot) <= catchup_window
+            ]
             if not due_slots:
                 continue
             active_platforms = set(_active_platforms(target))

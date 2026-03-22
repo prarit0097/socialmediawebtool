@@ -175,3 +175,4 @@ python manage.py run_scheduler
 - Unique-content rule tighten ki gayi: jo Drive media file ek baar sab active platforms par publish ho jaaye, woh auto-post queue me dubara reuse nahi hogi. Nayi posting ke liye nayi file chahiye hogi.
 - Posting Times section me per-slot `Delete` button add kiya gaya. Slot delete karne par `posts per day` count bhi automatically kam ho jayega.
 - Existing targets jinke exact `posting_times` pehle blank the, unke liye edit form ab default times auto-fill karta hai aur validation errors clearly UI par dikhata hai.
+- Scheduler catch-up window add ki gayi. Ab bohot purane missed slots same din me achanak backfill nahi honge, isliye `Test Post Now` ke saath extra old-slot postings fire nahi honi chahiye.

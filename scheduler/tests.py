@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import datetime, time
 
 from django.test import TestCase
 from django.test.utils import override_settings
@@ -66,6 +66,31 @@ class SchedulingTest(TestCase):
         with patch("scheduler.services.publishing.publish_target") as publish_target_mock:
             publish_due_targets(reference_time=slots[1])
         publish_target_mock.assert_called_once_with(target, scheduled_for=slots[1])
+
+    @override_settings(SCHEDULER_CATCHUP_MINUTES=60)
+    def test_due_runner_ignores_old_missed_slots_outside_catchup_window(self):
+        from unittest.mock import patch
+        from django.utils import timezone
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb5", name="FB")
+        ig = credential.accounts.create(platform="instagram", external_id="ig5", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:5|ig:5",
+            display_name="No Backfill",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posts_per_day=2,
+            posting_times=["09:00", "10:00"],
+        )
+        reference_time = timezone.make_aware(datetime.strptime("2026-03-22 16:30", "%Y-%m-%d %H:%M"))
+
+        with patch("scheduler.services.publishing.publish_target") as publish_target_mock:
+            result = publish_due_targets(reference_time=reference_time)
+        publish_target_mock.assert_not_called()
+        self.assertEqual(result["success"], 0)
 
 
 class ProxyHelpersTest(TestCase):
