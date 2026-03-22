@@ -179,3 +179,4 @@ python manage.py run_scheduler
 - Daily Telegram report ke liye missed-start catch-up add kiya gaya. Agar scheduler 9 AM ke baad start ho, to bhi us din ka pending report send ho jayega.
 - Telegram report send logic ko adjust kiya gaya taaki previous day ki manual test/send aaj ke scheduled 9 AM report ko block na kare.
 - Google Drive folder listing me pagination add ki gayi. Ab 100 se zyada files wale folders ka real full count app health aur posting logic me dikhna chahiye.
+- Dashboard top par `Active Scheduling Profiles` section add kiya gaya taaki jo profiles currently scheduling me use ho rahi hain woh sabse upar hi visible rahein.

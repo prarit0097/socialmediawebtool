@@ -1,6 +1,33 @@
 {% extends "scheduler/base.html" %}
 
 {% block content %}
+<section class="card" style="margin-bottom: 20px;">
+    <div class="section-title">
+        <h2>Active Scheduling Profiles</h2>
+        <span class="badge connected">{{ active_scheduled_targets|length }} active</span>
+    </div>
+    <div class="row-list">
+        {% for item in active_scheduled_targets %}
+            <a class="target-row" href="{% url 'scheduler:target_detail' item.target.pk %}">
+                <strong>{{ item.target.display_name }}</strong>
+                <div class="target-meta">
+                    {% if item.target.facebook_account %}<span>FB: {{ item.target.facebook_account.display_name }}</span>{% endif %}
+                    {% if item.target.instagram_account %}<span>IG: {{ item.target.instagram_account.display_name }}</span>{% endif %}
+                    <span>Posts/day: {{ item.target.posts_per_day }}</span>
+                    <span class="badge {{ item.health.overall }}">{{ item.health.overall }}</span>
+                </div>
+                <div class="target-meta">
+                    <span>Drive: {{ item.target.drive_folder_id }}</span>
+                    <span>Files: {{ item.health.file_count }}</span>
+                    <span>Media: {{ item.health.media_count }}</span>
+                    <span>Cached: {{ item.health.cached_asset_count }}</span>
+                </div>
+            </a>
+        {% empty %}
+            <p class="muted">Abhi koi active scheduling profile configured nahi hai.</p>
+        {% endfor %}
+    </div>
+</section>
 <div class="grid">
     <div class="stack">
         <section class="card">

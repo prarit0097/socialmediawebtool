@@ -58,9 +58,15 @@ def dashboard(request):
         form = MetaCredentialForm()
 
     targets = PublishingTarget.objects.select_related("facebook_account", "instagram_account", "credential")
+    active_scheduled_targets = [
+        {"target": target, "health": build_target_health(target)}
+        for target in targets
+        if target.is_active and target.drive_folder_id and (target.facebook_account_id or target.instagram_account_id)
+    ]
     context = {
         "form": form,
         "credentials": MetaCredential.objects.prefetch_related("targets").all(),
+        "active_scheduled_targets": active_scheduled_targets,
         "connected_targets": [{"target": target, "health": build_target_health(target)} for target in targets if target.is_connected_pair],
         "unconnected_targets": [{"target": target, "health": build_target_health(target)} for target in targets if not target.is_connected_pair],
     }
