@@ -59,6 +59,16 @@
     <form method="post">
         {% csrf_token %}
         <input type="hidden" name="action" value="save">
+        {% if form.non_field_errors %}
+            <div class="card" style="padding: 14px; margin-bottom: 16px;">
+                <h3 style="margin-bottom: 8px;">Please fix these issues</h3>
+                <ul class="issue-list">
+                    {% for error in form.non_field_errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
         {{ form.drive_folder_url.label_tag }}
         {{ form.drive_folder_url }}
         {{ form.drive_folder_id.label_tag }}
@@ -109,11 +119,7 @@
 
     const syncHidden = () => {
         const inputs = list.querySelectorAll("input[type='time']");
-        const cleanedValues = Array.from(inputs)
-            .map((input) => input.value)
-            .filter((value) => value);
-        hiddenField.value = JSON.stringify(cleanedValues);
-        postsPerDayInput.value = cleanedValues.length || 1;
+        hiddenField.value = JSON.stringify(Array.from(inputs).map((input) => input.value));
     };
 
     const removeSlot = (indexToRemove) => {

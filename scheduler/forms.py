@@ -42,7 +42,21 @@ class PublishingTargetForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["posting_times_json"].initial = json.dumps(self.instance.posting_times or [])
+        initial_times = self.instance.posting_times or self._build_default_times()
+        self.fields["posting_times_json"].initial = json.dumps(initial_times)
+
+    def _build_default_times(self):
+        count = max(self.instance.posts_per_day or 1, 1)
+        start = self.instance.posting_window_start
+        end = self.instance.posting_window_end
+        if not start or not end:
+            return []
+        start_dt = datetime.combine(datetime.today(), start)
+        end_dt = datetime.combine(datetime.today(), end)
+        if count == 1:
+            return [start.strftime("%H:%M")]
+        interval = (end_dt - start_dt) / (count - 1)
+        return [(start_dt + interval * index).strftime("%H:%M") for index in range(count)]
 
     def clean(self):
         cleaned_data = super().clean()
@@ -66,6 +80,8 @@ class PublishingTargetForm(forms.ModelForm):
             if not isinstance(values, list):
                 raise forms.ValidationError("Posting times payload must be a list.")
             for value in values:
+                if not value:
+                    raise forms.ValidationError("Please fill all posting time slots or delete unused ones.")
                 try:
                     parsed = datetime.strptime(value, "%H:%M").time()
                 except ValueError:

@@ -174,3 +174,4 @@ python manage.py run_scheduler
 - Target `Riya Arora + Riya Arora` ke liye ek extra `4:00 PM IST` slot add kiya gaya. Current exact times: `09:00`, `10:00`, `16:00`, `18:00`, `19:00`.
 - Unique-content rule tighten ki gayi: jo Drive media file ek baar sab active platforms par publish ho jaaye, woh auto-post queue me dubara reuse nahi hogi. Nayi posting ke liye nayi file chahiye hogi.
 - Posting Times section me per-slot `Delete` button add kiya gaya. Slot delete karne par `posts per day` count bhi automatically kam ho jayega.
+- Existing targets jinke exact `posting_times` pehle blank the, unke liye edit form ab default times auto-fill karta hai aur validation errors clearly UI par dikhata hai.
