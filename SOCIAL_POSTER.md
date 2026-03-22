@@ -178,3 +178,4 @@ python manage.py run_scheduler
 - Scheduler catch-up window add ki gayi. Ab bohot purane missed slots same din me achanak backfill nahi honge, isliye `Test Post Now` ke saath extra old-slot postings fire nahi honi chahiye.
 - Daily Telegram report ke liye missed-start catch-up add kiya gaya. Agar scheduler 9 AM ke baad start ho, to bhi us din ka pending report send ho jayega.
 - Telegram report send logic ko adjust kiya gaya taaki previous day ki manual test/send aaj ke scheduled 9 AM report ko block na kare.
+- Google Drive folder listing me pagination add ki gayi. Ab 100 se zyada files wale folders ka real full count app health aur posting logic me dikhna chahiye.

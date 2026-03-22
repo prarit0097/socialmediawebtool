@@ -17,6 +17,25 @@ class DriveHelpersTest(TestCase):
         folder_id = extract_drive_folder_id("https://drive.google.com/drive/folders/abc123XYZ?usp=sharing")
         self.assertEqual(folder_id, "abc123XYZ")
 
+    def test_list_folder_files_handles_pagination(self):
+        from unittest.mock import MagicMock, patch
+        from .services.drive import list_folder_files
+
+        service = MagicMock()
+        files_resource = MagicMock()
+        service.files.return_value = files_resource
+        files_resource.list.return_value.execute.side_effect = [
+            {"files": [{"id": "1", "name": "A", "mimeType": "image/jpeg"}], "nextPageToken": "page-2"},
+            {"files": [{"id": "2", "name": "B", "mimeType": "video/mp4"}]},
+        ]
+
+        with patch("scheduler.services.drive.get_drive_service", return_value=service):
+            result = list_folder_files("folder123")
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["id"], "1")
+        self.assertEqual(result[1]["id"], "2")
+
 
 class SchedulingTest(TestCase):
     def test_daily_slots_count_matches_posts_per_day(self):

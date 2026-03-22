@@ -77,18 +77,27 @@ def list_folder_files(folder_id: str) -> list[dict]:
         raise DriveConfigError("Google Drive folder ID is required.")
 
     service = get_drive_service()
-    response = (
-        service.files()
-        .list(
-            q=f"'{folder_id}' in parents and trashed = false",
-            fields="files(id,name,mimeType,createdTime,webViewLink,webContentLink)",
-            orderBy="createdTime",
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
+    files = []
+    page_token = None
+    while True:
+        response = (
+            service.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                fields="nextPageToken,files(id,name,mimeType,createdTime,webViewLink,webContentLink)",
+                orderBy="createdTime",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            )
+            .execute()
         )
-        .execute()
-    )
-    return response.get("files", [])
+        files.extend(response.get("files", []))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    return files
 
 
 def is_publishable_media(file_obj: dict) -> bool:
