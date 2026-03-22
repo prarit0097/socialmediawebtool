@@ -173,3 +173,4 @@ python manage.py run_scheduler
 - Slot progression logic ko fix kiya gaya taaki `9 AM`, `10 AM` jaise exact times apne-apne slot ke hisaab se hi chalein aur ek slot multiple files kha kar next slot ko confuse na kare.
 - Target `Riya Arora + Riya Arora` ke liye ek extra `4:00 PM IST` slot add kiya gaya. Current exact times: `09:00`, `10:00`, `16:00`, `18:00`, `19:00`.
 - Unique-content rule tighten ki gayi: jo Drive media file ek baar sab active platforms par publish ho jaaye, woh auto-post queue me dubara reuse nahi hogi. Nayi posting ke liye nayi file chahiye hogi.
+- Posting Times section me per-slot `Delete` button add kiya gaya. Slot delete karne par `posts per day` count bhi automatically kam ho jayega.

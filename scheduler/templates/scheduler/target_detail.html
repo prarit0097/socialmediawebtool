@@ -109,11 +109,30 @@
 
     const syncHidden = () => {
         const inputs = list.querySelectorAll("input[type='time']");
-        hiddenField.value = JSON.stringify(Array.from(inputs).map((input) => input.value));
+        const cleanedValues = Array.from(inputs)
+            .map((input) => input.value)
+            .filter((value) => value);
+        hiddenField.value = JSON.stringify(cleanedValues);
+        postsPerDayInput.value = cleanedValues.length || 1;
+    };
+
+    const removeSlot = (indexToRemove) => {
+        values = values.filter((_, index) => index !== indexToRemove);
+        if (!values.length) {
+            values = [""];
+        }
+        postsPerDayInput.value = values.length;
+        build();
     };
 
     const build = () => {
         const count = Math.max(parseInt(postsPerDayInput.value || "1", 10), 1);
+        if (values.length > count) {
+            values = values.slice(0, count);
+        }
+        while (values.length < count) {
+            values.push("");
+        }
         list.innerHTML = "";
         for (let index = 0; index < count; index += 1) {
             const wrapper = document.createElement("div");
@@ -127,10 +146,25 @@
             input.type = "time";
             input.id = `posting-time-${index}`;
             input.value = values[index] || "";
-            input.addEventListener("input", syncHidden);
+            input.addEventListener("input", () => {
+                values[index] = input.value;
+                syncHidden();
+            });
+
+            const actions = document.createElement("div");
+            actions.className = "slot-actions";
+
+            const removeButton = document.createElement("button");
+            removeButton.type = "button";
+            removeButton.className = "danger slot-delete";
+            removeButton.textContent = "Delete";
+            removeButton.disabled = count <= 1;
+            removeButton.addEventListener("click", () => removeSlot(index));
 
             wrapper.appendChild(label);
             wrapper.appendChild(input);
+            actions.appendChild(removeButton);
+            wrapper.appendChild(actions);
             list.appendChild(wrapper);
         }
         syncHidden();

@@ -71,8 +71,9 @@ class PublishingTargetForm(forms.ModelForm):
                 except ValueError:
                     raise forms.ValidationError(f"Invalid posting time: {value}")
                 parsed_times.append(parsed.strftime("%H:%M"))
-        if len(parsed_times) != cleaned_data.get("posts_per_day"):
-            raise forms.ValidationError("Please provide exactly one posting time for each daily post.")
+        if not parsed_times:
+            raise forms.ValidationError("Please keep at least one posting time.")
+        cleaned_data["posts_per_day"] = len(parsed_times)
         if len(set(parsed_times)) != len(parsed_times):
             raise forms.ValidationError("Posting times must be unique.")
         cleaned_data["posting_times"] = parsed_times
