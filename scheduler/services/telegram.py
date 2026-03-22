@@ -134,7 +134,10 @@ def send_daily_report(force=False, report_date=None):
     now = timezone.localtime()
     report_date = report_date or (now.date() - timedelta(days=1))
     report_log, _ = DailyReportLog.objects.get_or_create(report_date=report_date)
-    if report_log.sent_at and not force:
+    already_sent_today = False
+    if report_log.sent_at:
+        already_sent_today = timezone.localtime(report_log.sent_at).date() == now.date()
+    if already_sent_today and not force:
         return {"status_message": f"Report for {report_date:%Y-%m-%d} was already sent."}
     message = build_daily_report_message(report_date)
     send_telegram_message(message)

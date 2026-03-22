@@ -1,12 +1,14 @@
 import atexit
 import os
 import time
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from scheduler.models import DailyReportLog
 from scheduler.services.publishing import publish_due_targets
 from scheduler.services.telegram import send_daily_report
 
@@ -45,6 +47,16 @@ def _acquire_scheduler_lock() -> None:
     atexit.register(_cleanup)
 
 
+def _should_send_daily_report(now) -> bool:
+    if now.hour < settings.REPORT_HOUR:
+        return False
+    report_date = now.date() - timedelta(days=1)
+    report_log = DailyReportLog.objects.filter(report_date=report_date).first()
+    if not report_log or not report_log.sent_at:
+        return True
+    return timezone.localtime(report_log.sent_at).date() != now.date()
+
+
 class Command(BaseCommand):
     help = "Continuously poll for due posts and send the daily Telegram report."
 
@@ -59,7 +71,7 @@ class Command(BaseCommand):
         while True:
             now = timezone.localtime()
             publish_due_targets(reference_time=now)
-            if now.hour == settings.REPORT_HOUR and now.minute == 0:
+            if _should_send_daily_report(now):
                 try:
                     send_daily_report()
                 except Exception as exc:

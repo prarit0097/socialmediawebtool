@@ -176,3 +176,5 @@ python manage.py run_scheduler
 - Posting Times section me per-slot `Delete` button add kiya gaya. Slot delete karne par `posts per day` count bhi automatically kam ho jayega.
 - Existing targets jinke exact `posting_times` pehle blank the, unke liye edit form ab default times auto-fill karta hai aur validation errors clearly UI par dikhata hai.
 - Scheduler catch-up window add ki gayi. Ab bohot purane missed slots same din me achanak backfill nahi honge, isliye `Test Post Now` ke saath extra old-slot postings fire nahi honi chahiye.
+- Daily Telegram report ke liye missed-start catch-up add kiya gaya. Agar scheduler 9 AM ke baad start ho, to bhi us din ka pending report send ho jayega.
+- Telegram report send logic ko adjust kiya gaya taaki previous day ki manual test/send aaj ke scheduled 9 AM report ko block na kare.
