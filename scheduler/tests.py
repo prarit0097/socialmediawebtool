@@ -121,6 +121,32 @@ class SharedQueueTest(TestCase):
             target.post_logs.create(platform="instagram", scheduled_for=get_daily_slots(target)[0], status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
             self.assertEqual(pick_next_shared_file(target)["id"], "file2")
 
+    def test_fully_published_media_is_not_reused(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB")
+        ig = credential.accounts.create(platform="instagram", external_id="ig1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:9|ig:9",
+            display_name="No Reuse",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+
+        from unittest.mock import patch
+
+        files = [
+            {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg"},
+        ]
+        slot = get_daily_slots(target)[0]
+        target.post_logs.create(platform="facebook", scheduled_for=slot, status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
+        target.post_logs.create(platform="instagram", scheduled_for=slot, status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=files):
+            with self.assertRaisesMessage(Exception, "already been published on every active platform"):
+                pick_next_shared_file(target)
+
 
 class HealthTest(TestCase):
     def test_health_includes_cached_asset_count(self):

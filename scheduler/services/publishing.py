@@ -77,7 +77,7 @@ def pick_next_file(target: PublishingTarget) -> dict:
         if file_obj["id"] not in used_ids:
             return file_obj
     if media_files:
-        return media_files[0]
+        raise PublishingError("All unique media files in the configured Google Drive folder have already been published. Add new files to continue posting.")
     raise PublishingError("No publishable image or video files found in the configured Google Drive folder.")
 
 
@@ -125,7 +125,7 @@ def pick_next_shared_file(target: PublishingTarget) -> dict:
         if success_map.get(file_obj["id"], set()) != active_platforms:
             return file_obj
     if media_files:
-        return media_files[0]
+        raise PublishingError("All unique media files in the configured Google Drive folder have already been published on every active platform. Add new files to continue posting.")
     raise PublishingError("No publishable image or video files found in the configured Google Drive folder.")
 
 
