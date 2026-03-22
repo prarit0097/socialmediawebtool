@@ -46,6 +46,6 @@ def build_target_health(target: PublishingTarget) -> dict:
         "file_count": file_count,
         "media_count": media_count,
         "caption_found": caption_found,
-        "cached_asset_count": target.media_assets.filter(status="ready").count(),
+        "cached_asset_count": getattr(target, "ready_media_asset_count", target.media_assets.filter(status="ready").count()),
         "latest_logs": latest_logs,
     }

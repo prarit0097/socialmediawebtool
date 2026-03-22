@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.core.signing import BadSignature, SignatureExpired
 from django.contrib import messages
@@ -57,18 +58,27 @@ def dashboard(request):
     else:
         form = MetaCredentialForm()
 
-    targets = PublishingTarget.objects.select_related("facebook_account", "instagram_account", "credential")
+    targets = list(
+        PublishingTarget.objects.select_related("facebook_account", "instagram_account", "credential").annotate(
+            ready_media_asset_count=Count("media_assets", filter=Q(media_assets__status="ready"))
+        )
+    )
+    target_items = []
+    for target in targets:
+        health = build_target_health(target)
+        target_items.append({"target": target, "health": health})
+
     active_scheduled_targets = [
-        {"target": target, "health": build_target_health(target)}
-        for target in targets
-        if target.is_active and target.drive_folder_id and (target.facebook_account_id or target.instagram_account_id)
+        item
+        for item in target_items
+        if item["target"].is_active and item["target"].drive_folder_id and (item["target"].facebook_account_id or item["target"].instagram_account_id)
     ]
     context = {
         "form": form,
         "credentials": MetaCredential.objects.prefetch_related("targets").all(),
         "active_scheduled_targets": active_scheduled_targets,
-        "connected_targets": [{"target": target, "health": build_target_health(target)} for target in targets if target.is_connected_pair],
-        "unconnected_targets": [{"target": target, "health": build_target_health(target)} for target in targets if not target.is_connected_pair],
+        "connected_targets": [item for item in target_items if item["target"].is_connected_pair],
+        "unconnected_targets": [item for item in target_items if not item["target"].is_connected_pair],
     }
     return render(request, "scheduler/dashboard.html", context)
 
