@@ -131,12 +131,16 @@ def target_detail(request, pk):
     else:
         form = PublishingTargetForm(instance=target)
     latest_ai_insight = target.ai_media_insights.order_by("-updated_at").first()
+    ai_meta = {}
+    if latest_ai_insight:
+        ai_meta = (latest_ai_insight.raw_payload or {}).get("_ai_meta", {})
     context = {
         "target": target,
         "form": form,
         "health": build_target_health(target),
         "ai_is_configured": ai_is_configured(),
         "latest_ai_insight": latest_ai_insight,
+        "latest_ai_meta": ai_meta,
     }
     return render(request, "scheduler/target_detail.html", context)
 

@@ -430,6 +430,32 @@ class AIViewFlowTest(TestCase):
         self.assertContains(response, "AI caption applied from Healthy Morning.jpeg.")
         self.assertEqual(target.default_caption, "Primary caption from AI\n\n#fit #fresh")
 
+    def test_target_detail_renders_ai_meta_without_template_error(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:view2",
+            display_name="AI Meta View",
+            drive_folder_id="folder",
+        )
+        target.ai_media_insights.create(
+            drive_file_id="file-meta",
+            drive_file_name="POST1.jpeg",
+            source_mime_type="image/jpeg",
+            primary_caption="Caption",
+            raw_payload={
+                "_ai_meta": {
+                    "requested_model": "openai/gpt-4.1-mini",
+                    "resolved_model": "gpt-4.1-mini",
+                    "provider_base_url": "https://api.openai.com/v1",
+                }
+            },
+        )
+
+        response = self.client.get(reverse("scheduler:target_detail", args=[target.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "openai/gpt-4.1-mini")
+
 
 class SharedQueueTest(TestCase):
     def test_same_file_is_retained_until_all_platforms_succeed(self):

@@ -129,9 +129,9 @@
                 <span>Duplicate risk: {{ latest_ai_insight.duplicate_risk|default:"-" }}</span>
                 <span>Quality risk: {{ latest_ai_insight.quality_risk|default:"-" }}</span>
                 <span>Safe: {{ latest_ai_insight.safe_to_post|yesno:"yes,no" }}</span>
-                {% if latest_ai_insight.raw_payload._ai_meta %}
-                    <span>Model: {{ latest_ai_insight.raw_payload._ai_meta.requested_model }}</span>
-                    <span>Resolved: {{ latest_ai_insight.raw_payload._ai_meta.resolved_model }}</span>
+                {% if latest_ai_meta %}
+                    <span>Model: {{ latest_ai_meta.requested_model }}</span>
+                    <span>Resolved: {{ latest_ai_meta.resolved_model }}</span>
                 {% endif %}
             </div>
             <div class="stack">
