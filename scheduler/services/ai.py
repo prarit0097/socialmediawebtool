@@ -21,6 +21,15 @@ def ai_is_configured() -> bool:
     return bool(settings.AI_API_KEY.strip())
 
 
+def _resolve_model_name(model_name: str) -> str:
+    model_name = (model_name or "").strip()
+    if not model_name:
+        return model_name
+    if settings.AI_API_BASE_URL.rstrip("/").lower().startswith("https://api.openai.com"):
+        return model_name.split("/", 1)[1] if "/" in model_name else model_name
+    return model_name
+
+
 def _normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
@@ -132,6 +141,7 @@ def _call_openai_json(system_prompt: str, user_prompt: str) -> dict:
 
     errors = []
     for model_name in models_to_try:
+        request_model = _resolve_model_name(model_name)
         try:
             response = requests.post(
                 f"{settings.AI_API_BASE_URL.rstrip('/')}/responses",
@@ -140,7 +150,7 @@ def _call_openai_json(system_prompt: str, user_prompt: str) -> dict:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": model_name,
+                    "model": request_model,
                     "input": [
                         {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
                         {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},

@@ -191,3 +191,6 @@ python manage.py run_scheduler
 - AI feature audit ke baad AI request handling aur strong ki gayi: network/request failure aur invalid JSON cases ko per-model capture karke fallback model par move kiya jayega.
 - Target detail page ke `AI Workspace` me ab `short/long rewrites`, `Hindi/English/Hinglish language rewrites`, aur `translation variants` alag-alag clearly dikhte hain.
 - AI end-to-end flow ke liye extra tests add kiye gaye: AI insight generation, AI caption apply button, AI auto-caption publish path, aur AI report summary inclusion verify kiya gaya.
+- Real OpenAI key testing ke dauran `.env` me `AI_API_KEY` aur `AI_API_BASE_URL` lines ulta paste hui mili; local config ko sahi kiya gaya.
+- OpenAI-compatible base URL ke liye model-name normalization add ki gayi: agar config me `openai/gpt-4.1-nano` ya `openai/gpt-4.1-mini` likha ho to OpenAI API call me automatically `gpt-4.1-nano` aur `gpt-4.1-mini` send kiya jayega.
+- Live provider verification me minimal JSON response aur AI-enhanced daily report summary dono successful chale.

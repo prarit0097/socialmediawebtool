@@ -7,7 +7,7 @@ from django.urls import reverse
 from .forms import PublishingTargetForm
 from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
-from .services.ai import build_ai_caption_for_media, get_or_generate_media_insight
+from .services.ai import _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.publishing import _platform_already_succeeded_for_file, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
@@ -142,6 +142,11 @@ class DiagnosticsTest(TestCase):
 
 
 class AIServiceTest(TestCase):
+    @override_settings(AI_API_BASE_URL="https://api.openai.com/v1")
+    def test_openai_model_name_prefix_is_removed_for_openai_base_url(self):
+        self.assertEqual(_resolve_model_name("openai/gpt-4.1-nano"), "gpt-4.1-nano")
+        self.assertEqual(_resolve_model_name("gpt-4.1-mini"), "gpt-4.1-mini")
+
     def test_ai_insight_falls_back_to_heuristics_without_api_key(self):
         credential = MetaCredential.objects.create(label="Test", access_token="token")
         target = PublishingTarget.objects.create(
@@ -181,8 +186,8 @@ class AIServiceTest(TestCase):
             payload = _call_openai_json("system", "user")
 
         self.assertEqual(payload["primary_caption"], "ok")
-        self.assertEqual(post_mock.call_args_list[0].kwargs["json"]["model"], "openai/gpt-4.1-nano")
-        self.assertEqual(post_mock.call_args_list[1].kwargs["json"]["model"], "openai/gpt-4.1-mini")
+        self.assertEqual(post_mock.call_args_list[0].kwargs["json"]["model"], "gpt-4.1-nano")
+        self.assertEqual(post_mock.call_args_list[1].kwargs["json"]["model"], "gpt-4.1-mini")
 
     @override_settings(AI_API_KEY="test-key")
     def test_ai_insight_populates_requested_feature_fields(self):
