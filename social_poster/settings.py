@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -19,9 +20,24 @@ def load_dotenv(env_path: Path) -> None:
 
 load_dotenv(BASE_DIR / ".env")
 
+
+def get_env_list(name: str, default: str = "") -> list[str]:
+    return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
+
+
+def build_csrf_trusted_origins() -> list[str]:
+    origins = set(get_env_list("DJANGO_CSRF_TRUSTED_ORIGINS"))
+    public_base_url = os.getenv("PUBLIC_APP_BASE_URL", "").strip()
+    if public_base_url:
+        parsed = urlparse(public_base_url)
+        if parsed.scheme and parsed.netloc:
+            origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    return sorted(origins)
+
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-key")
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
-ALLOWED_HOSTS = [host for host in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if host]
+ALLOWED_HOSTS = get_env_list("DJANGO_ALLOWED_HOSTS", "*")
+CSRF_TRUSTED_ORIGINS = build_csrf_trusted_origins()
 
 INSTALLED_APPS = [
     "django.contrib.admin",

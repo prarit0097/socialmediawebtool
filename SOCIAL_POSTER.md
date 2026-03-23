@@ -199,3 +199,4 @@ python manage.py run_scheduler
 - Target detail page par AI model metadata dikhate waqt Django template underscore-key access error aa rahi thi; metadata ko view context me flatten karke issue fix kiya gaya.
 - Ollama support remove kar di gayi aur AI layer ko phir se pure OpenAI mode me simplify kiya gaya. Ab app `openai/gpt-4.1-nano` ko primary aur `openai/gpt-4.1-mini` ko fallback model ke roop me use karti hai.
 - Weak ya malformed AI output ke liye normalization aur quality gate active rakhi gayi hai, taaki poor structured responses ke baad same provider par better fallback model try kiya ja sake.
+- Live domain par form submit karte waqt `403 CSRF verification failed` issue fix kiya gaya. Ab `PUBLIC_APP_BASE_URL` se domain automatically trusted origin ban jata hai, aur optional extra origins `DJANGO_CSRF_TRUSTED_ORIGINS` se add kiye ja sakte hain.

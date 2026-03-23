@@ -64,6 +64,7 @@ Set these in `.env`:
 DJANGO_SECRET_KEY=change-me
 DJANGO_DEBUG=true
 DJANGO_ALLOWED_HOSTS=*
+DJANGO_CSRF_TRUSTED_ORIGINS=
 APP_TIME_ZONE=Asia/Kolkata
 META_GRAPH_BASE_URL=https://graph.facebook.com/v22.0
 GOOGLE_SERVICE_ACCOUNT_FILE=E:\path\to\service-account.json
@@ -82,6 +83,8 @@ AI_MODEL=openai/gpt-4.1-nano
 AI_FALLBACK_MODEL=openai/gpt-4.1-mini
 AI_TIMEOUT_SECONDS=90
 ```
+
+For live HTTPS domains, the app automatically trusts `PUBLIC_APP_BASE_URL` for CSRF. If you need more trusted origins, set `DJANGO_CSRF_TRUSTED_ORIGINS` as a comma-separated list.
 
 ## AI Features
 If you configure `AI_API_KEY`, the app can:
