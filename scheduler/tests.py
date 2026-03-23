@@ -2,15 +2,17 @@ from datetime import datetime, time
 
 from django.test import TestCase
 from django.test.utils import override_settings
+from django.urls import reverse
 
 from .forms import PublishingTargetForm
 from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
-from .services.ai import get_or_generate_media_insight
+from .services.ai import build_ai_caption_for_media, get_or_generate_media_insight
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
-from .services.publishing import _platform_already_succeeded_for_file, _slot_is_complete, get_daily_slots, pick_next_shared_file, publish_due_targets
+from .services.publishing import _platform_already_succeeded_for_file, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
+from .services.telegram import build_daily_report_message
 
 
 class DriveHelpersTest(TestCase):
@@ -181,6 +183,203 @@ class AIServiceTest(TestCase):
         self.assertEqual(payload["primary_caption"], "ok")
         self.assertEqual(post_mock.call_args_list[0].kwargs["json"]["model"], "openai/gpt-4.1-nano")
         self.assertEqual(post_mock.call_args_list[1].kwargs["json"]["model"], "openai/gpt-4.1-mini")
+
+    @override_settings(AI_API_KEY="test-key")
+    def test_ai_insight_populates_requested_feature_fields(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:ai2",
+            display_name="AI Full",
+            drive_folder_id="folder",
+            default_caption="Base caption",
+            ai_enabled=True,
+        )
+        file_obj = {"id": "file2", "name": "Womens Wellness Morning Tips.jpeg", "mimeType": "image/jpeg"}
+        payload = {
+            "primary_caption": "Primary caption",
+            "hashtags": ["#wellness", "#morning"],
+            "short_caption": "Short version",
+            "long_caption": "Long version",
+            "hindi_caption": "Hindi rewrite",
+            "english_caption": "English rewrite",
+            "hinglish_caption": "Hinglish rewrite",
+            "primary_category": "women wellness",
+            "secondary_tags": ["health", "routine"],
+            "duplicate_risk": "low",
+            "duplicate_reason": "Looks fresh.",
+            "quality_risk": "low",
+            "quality_issues": [],
+            "safe_to_post": True,
+            "translated_hindi": "Hindi translation",
+            "translated_english": "English translation",
+            "translated_hinglish": "Hinglish translation",
+            "best_posting_times": ["09:00", "18:00"],
+            "best_posting_reason": "Morning and evening performed best.",
+            "report_summary": "Smart summary",
+        }
+
+        with patch("scheduler.services.ai._call_openai_json", return_value=payload):
+            insight = get_or_generate_media_insight(target, file_obj=file_obj, force=True)
+
+        self.assertEqual(insight.primary_caption, "Primary caption")
+        self.assertEqual(insight.hashtags, ["#wellness", "#morning"])
+        self.assertEqual(insight.short_caption, "Short version")
+        self.assertEqual(insight.long_caption, "Long version")
+        self.assertEqual(insight.hindi_caption, "Hindi rewrite")
+        self.assertEqual(insight.english_caption, "English rewrite")
+        self.assertEqual(insight.hinglish_caption, "Hinglish rewrite")
+        self.assertEqual(insight.translated_hindi, "Hindi translation")
+        self.assertEqual(insight.translated_english, "English translation")
+        self.assertEqual(insight.translated_hinglish, "Hinglish translation")
+        self.assertEqual(insight.duplicate_risk, "low")
+        self.assertEqual(insight.quality_risk, "low")
+        self.assertEqual(insight.primary_category, "women wellness")
+        self.assertEqual(insight.best_posting_times, ["09:00", "18:00"])
+        self.assertEqual(target.ai_last_report_summary, "Smart summary")
+
+    @override_settings(AI_API_KEY="test-key")
+    def test_build_ai_caption_for_media_uses_primary_caption_and_hashtags(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:ai3",
+            display_name="AI Caption",
+            drive_folder_id="folder",
+            ai_enabled=True,
+        )
+        file_obj = {"id": "file3", "name": "Healing.jpeg", "mimeType": "image/jpeg"}
+        payload = {
+            "primary_caption": "Generated caption",
+            "hashtags": ["#a", "#b"],
+            "short_caption": "",
+            "long_caption": "",
+            "hindi_caption": "",
+            "english_caption": "",
+            "hinglish_caption": "",
+            "primary_category": "general",
+            "secondary_tags": [],
+            "duplicate_risk": "low",
+            "duplicate_reason": "",
+            "quality_risk": "low",
+            "quality_issues": [],
+            "safe_to_post": True,
+            "translated_hindi": "",
+            "translated_english": "",
+            "translated_hinglish": "",
+            "best_posting_times": ["10:00"],
+            "best_posting_reason": "",
+            "report_summary": "",
+        }
+
+        with patch("scheduler.services.ai._call_openai_json", return_value=payload):
+            caption = build_ai_caption_for_media(target, file_obj)
+
+        self.assertEqual(caption, "Generated caption\n\n#a #b")
+
+    def test_auto_caption_toggle_uses_ai_caption_on_publish_path(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:ai4",
+            display_name="AI Auto",
+            drive_folder_id="folder",
+            default_caption="Default",
+            ai_enabled=True,
+            ai_auto_caption_enabled=True,
+        )
+        file_obj = {"id": "file4", "name": "Healing.jpeg", "mimeType": "image/jpeg"}
+
+        with patch("scheduler.services.publishing.build_ai_caption_for_media", return_value="AI caption"):
+            caption = build_caption(target, file_obj=file_obj)
+
+        self.assertEqual(caption, "AI caption")
+
+    @override_settings(AI_API_KEY="test-key")
+    def test_daily_report_message_includes_ai_summary(self):
+        from unittest.mock import patch
+        from django.utils import timezone
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(credential=credential, sync_key="fb:ai5", display_name="AI Report")
+        target.post_logs.create(
+            platform="facebook",
+            scheduled_for=timezone.now(),
+            published_at=timezone.now(),
+            status="success",
+            drive_file_id="file5",
+            drive_file_name="POST5.jpeg",
+            message="ok",
+        )
+
+        with patch("scheduler.services.telegram.build_ai_report_summary", return_value="AI says things look good."):
+            message = build_daily_report_message(timezone.localdate())
+
+        self.assertIn("AI SUMMARY", message)
+        self.assertIn("AI says things look good.", message)
+
+
+class AIViewFlowTest(TestCase):
+    @override_settings(AI_API_KEY="test-key")
+    def test_generate_insight_and_apply_caption_buttons_work(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:view1",
+            display_name="AI View",
+            drive_folder_id="folder",
+            ai_enabled=True,
+        )
+        file_obj = {"id": "file6", "name": "Healthy Morning.jpeg", "mimeType": "image/jpeg"}
+        payload = {
+            "primary_caption": "Primary caption from AI",
+            "hashtags": ["#fit", "#fresh"],
+            "short_caption": "Short",
+            "long_caption": "Long",
+            "hindi_caption": "Hindi",
+            "english_caption": "English",
+            "hinglish_caption": "Hinglish",
+            "primary_category": "wellness",
+            "secondary_tags": ["tag1"],
+            "duplicate_risk": "low",
+            "duplicate_reason": "Fresh",
+            "quality_risk": "low",
+            "quality_issues": [],
+            "safe_to_post": True,
+            "translated_hindi": "Hindi translation",
+            "translated_english": "English translation",
+            "translated_hinglish": "Hinglish translation",
+            "best_posting_times": ["09:00"],
+            "best_posting_reason": "Best slot",
+            "report_summary": "Summary",
+        }
+
+        with patch("scheduler.services.ai._next_candidate_file", return_value=file_obj), patch(
+            "scheduler.services.ai._call_openai_json", return_value=payload
+        ):
+            response = self.client.post(
+                reverse("scheduler:target_detail", args=[target.pk]),
+                {"action": "generate_ai_insight"},
+                follow=True,
+            )
+            self.assertContains(response, "AI insight generated for Healthy Morning.jpeg.")
+            response = self.client.post(
+                reverse("scheduler:target_detail", args=[target.pk]),
+                {"action": "apply_ai_caption"},
+                follow=True,
+            )
+
+        target.refresh_from_db()
+        self.assertContains(response, "AI caption applied from Healthy Morning.jpeg.")
+        self.assertEqual(target.default_caption, "Primary caption from AI\n\n#fit #fresh")
 
 
 class SharedQueueTest(TestCase):

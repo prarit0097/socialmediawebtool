@@ -134,7 +134,8 @@
                 <div><strong>Primary Caption</strong><br>{{ latest_ai_insight.primary_caption|linebreaksbr }}</div>
                 <div><strong>Hashtags</strong><br>{% if latest_ai_insight.hashtags %}{{ latest_ai_insight.hashtags|join:" " }}{% else %}-{% endif %}</div>
                 <div><strong>Rewrites</strong><br>Short: {{ latest_ai_insight.short_caption|default:"-" }}<br>Long: {{ latest_ai_insight.long_caption|default:"-" }}</div>
-                <div><strong>Translations</strong><br>Hindi: {{ latest_ai_insight.translated_hindi|default:"-" }}<br>English: {{ latest_ai_insight.translated_english|default:"-" }}<br>Hinglish: {{ latest_ai_insight.translated_hinglish|default:"-" }}</div>
+                <div><strong>Language Rewrites</strong><br>Hindi: {{ latest_ai_insight.hindi_caption|default:"-" }}<br>English: {{ latest_ai_insight.english_caption|default:"-" }}<br>Hinglish: {{ latest_ai_insight.hinglish_caption|default:"-" }}</div>
+                <div><strong>Translation Variants</strong><br>Hindi: {{ latest_ai_insight.translated_hindi|default:"-" }}<br>English: {{ latest_ai_insight.translated_english|default:"-" }}<br>Hinglish: {{ latest_ai_insight.translated_hinglish|default:"-" }}</div>
                 <div><strong>Secondary Tags</strong><br>{% if latest_ai_insight.secondary_tags %}{{ latest_ai_insight.secondary_tags|join:", " }}{% else %}-{% endif %}</div>
                 <div><strong>Quality Issues</strong><br>{% if latest_ai_insight.quality_issues %}{{ latest_ai_insight.quality_issues|join:" | " }}{% else %}No major issue detected.{% endif %}</div>
                 <div><strong>Best Posting Suggestions</strong><br>{% if latest_ai_insight.best_posting_times %}{{ latest_ai_insight.best_posting_times|join:", " }}{% else %}-{% endif %}<br>{{ latest_ai_insight.best_posting_reason|default:"" }}</div>

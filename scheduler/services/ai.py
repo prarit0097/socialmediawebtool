@@ -132,22 +132,29 @@ def _call_openai_json(system_prompt: str, user_prompt: str) -> dict:
 
     errors = []
     for model_name in models_to_try:
-        response = requests.post(
-            f"{settings.AI_API_BASE_URL.rstrip('/')}/responses",
-            headers={
-                "Authorization": f"Bearer {settings.AI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model_name,
-                "input": [
-                    {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
-                    {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
-                ],
-            },
-            timeout=settings.AI_TIMEOUT_SECONDS,
-        )
-        data = response.json()
+        try:
+            response = requests.post(
+                f"{settings.AI_API_BASE_URL.rstrip('/')}/responses",
+                headers={
+                    "Authorization": f"Bearer {settings.AI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_name,
+                    "input": [
+                        {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+                        {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
+                    ],
+                },
+                timeout=settings.AI_TIMEOUT_SECONDS,
+            )
+            data = response.json()
+        except requests.RequestException as exc:
+            errors.append(f"{model_name}: request failed: {exc}")
+            continue
+        except ValueError as exc:
+            errors.append(f"{model_name}: response JSON parse failed: {exc}")
+            continue
         if response.status_code >= 400 or data.get("error"):
             message = data.get("error", {}).get("message", response.text)
             errors.append(f"{model_name}: {message}")

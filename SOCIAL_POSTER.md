@@ -188,3 +188,6 @@ python manage.py run_scheduler
 - `.env` template aur local `.env` ko readable sections me organize kiya gaya: Django, Meta, Google Drive, Public App, Telegram, Scheduler, aur AI blocks alag-alag rakh diye gaye taaki config samajhna easy ho.
 - AI model preference order set ki gayi: pehle `openai/gpt-4.1-nano`, aur agar wo fail ho to automatically `openai/gpt-4.1-mini` try kiya jayega.
 - AI service me fallback logic aur automated test add kiya gaya taaki primary model failure ke baad second model reliable tarike se try ho.
+- AI feature audit ke baad AI request handling aur strong ki gayi: network/request failure aur invalid JSON cases ko per-model capture karke fallback model par move kiya jayega.
+- Target detail page ke `AI Workspace` me ab `short/long rewrites`, `Hindi/English/Hinglish language rewrites`, aur `translation variants` alag-alag clearly dikhte hain.
+- AI end-to-end flow ke liye extra tests add kiye gaye: AI insight generation, AI caption apply button, AI auto-caption publish path, aur AI report summary inclusion verify kiya gaya.
