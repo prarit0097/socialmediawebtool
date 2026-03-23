@@ -29,6 +29,21 @@ class PublishingError(Exception):
     pass
 
 
+def _parse_graph_response(response) -> dict:
+    try:
+        data = response.json()
+    except ValueError:
+        snippet = (response.text or "").strip()
+        if snippet:
+            snippet = snippet[:300]
+        else:
+            snippet = "<empty response body>"
+        raise PublishingError(
+            f"Meta returned a non-JSON response (status {response.status_code}): {snippet}"
+        )
+    return data
+
+
 def _request_with_retries(method: str, url: str, **kwargs):
     last_exc = None
     for attempt in range(settings.META_GRAPH_RETRY_COUNT + 1):
@@ -48,7 +63,7 @@ def _graph_post(path: str, access_token: str, payload: dict) -> dict:
         f"{settings.META_GRAPH_BASE_URL}{path}",
         data={**payload, "access_token": access_token},
     )
-    data = response.json()
+    data = _parse_graph_response(response)
     if response.status_code >= 400 or data.get("error"):
         message = data.get("error", {}).get("message", response.text)
         raise PublishingError(message)
@@ -64,7 +79,7 @@ def _graph_get(path: str, access_token: str, params: dict | None = None) -> dict
         f"{settings.META_GRAPH_BASE_URL}{path}",
         params=query,
     )
-    data = response.json()
+    data = _parse_graph_response(response)
     if response.status_code >= 400 or data.get("error"):
         message = data.get("error", {}).get("message", response.text)
         raise PublishingError(message)
