@@ -54,6 +54,16 @@
             <input type="hidden" name="action" value="test_post">
             <button class="ghost" type="submit">Test Post Now</button>
         </form>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="generate_ai_insight">
+            <button class="ghost" type="submit">Generate AI Insight</button>
+        </form>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="apply_ai_caption">
+            <button class="ghost" type="submit">Apply AI Caption</button>
+        </form>
     </div>
 
     <form method="post">
@@ -87,10 +97,53 @@
         {{ form.posting_window_end }}
         {{ form.default_caption.label_tag }}
         {{ form.default_caption }}
+        <div class="card" style="padding: 14px;">
+            <h3 style="margin-bottom: 8px;">AI Settings</h3>
+            <p class="muted" style="margin-top: 0;">
+                {% if ai_is_configured %}
+                    AI API configured. Yahan se auto captions, hashtags, translation, duplicate warning aur smart suggestions control kar sakte ho.
+                {% else %}
+                    AI API key configured nahi hai. `.env` me `AI_API_KEY` aur optional `AI_MODEL` set karoge to ye features kaam karenge.
+                {% endif %}
+            </p>
+            {{ form.ai_enabled.label_tag }}
+            {{ form.ai_enabled }}
+            {{ form.ai_auto_caption_enabled.label_tag }}
+            {{ form.ai_auto_caption_enabled }}
+            {{ form.ai_language.label_tag }}
+            {{ form.ai_language }}
+            {{ form.ai_tone.label_tag }}
+            {{ form.ai_tone }}
+        </div>
         {{ form.is_active.label_tag }}
         {{ form.is_active }}
         <button type="submit">Save publishing settings</button>
     </form>
+
+    <div class="card" style="padding: 14px; margin-top: 16px;">
+        <h3 style="margin-bottom: 8px;">AI Workspace</h3>
+        {% if latest_ai_insight %}
+            <div class="target-meta" style="margin-bottom: 12px;">
+                <span>Last media: {{ latest_ai_insight.drive_file_name }}</span>
+                <span>Category: {{ latest_ai_insight.primary_category|default:"-" }}</span>
+                <span>Duplicate risk: {{ latest_ai_insight.duplicate_risk|default:"-" }}</span>
+                <span>Quality risk: {{ latest_ai_insight.quality_risk|default:"-" }}</span>
+                <span>Safe: {{ latest_ai_insight.safe_to_post|yesno:"yes,no" }}</span>
+            </div>
+            <div class="stack">
+                <div><strong>Primary Caption</strong><br>{{ latest_ai_insight.primary_caption|linebreaksbr }}</div>
+                <div><strong>Hashtags</strong><br>{% if latest_ai_insight.hashtags %}{{ latest_ai_insight.hashtags|join:" " }}{% else %}-{% endif %}</div>
+                <div><strong>Rewrites</strong><br>Short: {{ latest_ai_insight.short_caption|default:"-" }}<br>Long: {{ latest_ai_insight.long_caption|default:"-" }}</div>
+                <div><strong>Translations</strong><br>Hindi: {{ latest_ai_insight.translated_hindi|default:"-" }}<br>English: {{ latest_ai_insight.translated_english|default:"-" }}<br>Hinglish: {{ latest_ai_insight.translated_hinglish|default:"-" }}</div>
+                <div><strong>Secondary Tags</strong><br>{% if latest_ai_insight.secondary_tags %}{{ latest_ai_insight.secondary_tags|join:", " }}{% else %}-{% endif %}</div>
+                <div><strong>Quality Issues</strong><br>{% if latest_ai_insight.quality_issues %}{{ latest_ai_insight.quality_issues|join:" | " }}{% else %}No major issue detected.{% endif %}</div>
+                <div><strong>Best Posting Suggestions</strong><br>{% if latest_ai_insight.best_posting_times %}{{ latest_ai_insight.best_posting_times|join:", " }}{% else %}-{% endif %}<br>{{ latest_ai_insight.best_posting_reason|default:"" }}</div>
+                <div><strong>AI Report Summary</strong><br>{{ latest_ai_insight.report_summary|default:"-" }}</div>
+            </div>
+        {% else %}
+            <p class="muted">Abhi koi AI insight generated nahi hui. `Generate AI Insight` button use karo.</p>
+        {% endif %}
+    </div>
 
     <div class="card" style="padding: 14px; margin-top: 16px;">
         <h3 style="margin-bottom: 8px;">Recent Logs</h3>

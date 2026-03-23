@@ -9,7 +9,8 @@ from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 
 from .forms import MetaCredentialForm, PublishingTargetForm
-from .models import MediaAsset, MetaCredential, PublishingTarget
+from .models import AIMediaInsight, MediaAsset, MetaCredential, PublishingTarget
+from .services.ai import AIServiceError, ai_is_configured, get_or_generate_media_insight
 from .services.drive import download_drive_file, get_drive_file_metadata
 from .services.health import build_target_health
 from .services.media_transform import build_instagram_ready_image
@@ -102,6 +103,26 @@ def target_detail(request, pk):
             except Exception as exc:
                 messages.error(request, f"Test post failed: {exc}")
             return redirect("scheduler:target_detail", pk=target.pk)
+        if action == "generate_ai_insight":
+            try:
+                insight = get_or_generate_media_insight(target, force=True)
+                messages.success(request, f"AI insight generated for {insight.drive_file_name}.")
+            except AIServiceError as exc:
+                messages.error(request, f"AI insight failed: {exc}")
+            return redirect("scheduler:target_detail", pk=target.pk)
+        if action == "apply_ai_caption":
+            try:
+                insight = get_or_generate_media_insight(target)
+                if not insight.primary_caption.strip():
+                    raise AIServiceError("AI did not return a usable caption.")
+                target.default_caption = insight.primary_caption.strip()
+                if insight.hashtags:
+                    target.default_caption += "\n\n" + " ".join(insight.hashtags)
+                target.save(update_fields=["default_caption", "updated_at"])
+                messages.success(request, f"AI caption applied from {insight.drive_file_name}.")
+            except AIServiceError as exc:
+                messages.error(request, f"AI caption apply failed: {exc}")
+            return redirect("scheduler:target_detail", pk=target.pk)
         form = PublishingTargetForm(request.POST, instance=target)
         if form.is_valid():
             form.save()
@@ -109,10 +130,13 @@ def target_detail(request, pk):
             return redirect("scheduler:target_detail", pk=target.pk)
     else:
         form = PublishingTargetForm(instance=target)
+    latest_ai_insight = target.ai_media_insights.order_by("-updated_at").first()
     context = {
         "target": target,
         "form": form,
         "health": build_target_health(target),
+        "ai_is_configured": ai_is_configured(),
+        "latest_ai_insight": latest_ai_insight,
     }
     return render(request, "scheduler/target_detail.html", context)
 

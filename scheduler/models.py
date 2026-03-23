@@ -86,6 +86,12 @@ class PublishingTarget(models.Model):
     posting_window_start = models.TimeField(default=time(10, 0))
     posting_window_end = models.TimeField(default=time(18, 0))
     default_caption = models.TextField(blank=True)
+    ai_enabled = models.BooleanField(default=False)
+    ai_auto_caption_enabled = models.BooleanField(default=False)
+    ai_language = models.CharField(max_length=50, default="Hinglish")
+    ai_tone = models.CharField(max_length=50, default="Professional")
+    ai_last_report_summary = models.TextField(blank=True)
+    ai_last_generated_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     last_posted_at = models.DateTimeField(null=True, blank=True)
     last_status = models.CharField(max_length=50, blank=True)
@@ -157,6 +163,42 @@ class MediaAsset(models.Model):
 
     class Meta:
         unique_together = ("target", "drive_file_id", "variant")
+        ordering = ["-updated_at"]
+
+
+class AIMediaInsight(models.Model):
+    target = models.ForeignKey(PublishingTarget, on_delete=models.CASCADE, related_name="ai_media_insights")
+    drive_file_id = models.CharField(max_length=255)
+    drive_file_name = models.CharField(max_length=255)
+    source_mime_type = models.CharField(max_length=120, blank=True)
+    primary_category = models.CharField(max_length=120, blank=True)
+    secondary_tags = models.JSONField(default=list, blank=True)
+    primary_caption = models.TextField(blank=True)
+    hashtags = models.JSONField(default=list, blank=True)
+    short_caption = models.TextField(blank=True)
+    long_caption = models.TextField(blank=True)
+    hindi_caption = models.TextField(blank=True)
+    english_caption = models.TextField(blank=True)
+    hinglish_caption = models.TextField(blank=True)
+    duplicate_risk = models.CharField(max_length=20, blank=True)
+    duplicate_reason = models.TextField(blank=True)
+    quality_risk = models.CharField(max_length=20, blank=True)
+    quality_issues = models.JSONField(default=list, blank=True)
+    safe_to_post = models.BooleanField(default=True)
+    translated_hindi = models.TextField(blank=True)
+    translated_english = models.TextField(blank=True)
+    translated_hinglish = models.TextField(blank=True)
+    best_posting_times = models.JSONField(default=list, blank=True)
+    best_posting_reason = models.TextField(blank=True)
+    report_summary = models.TextField(blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    last_error = models.TextField(blank=True)
+    last_analyzed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("target", "drive_file_id")
         ordering = ["-updated_at"]
 
 

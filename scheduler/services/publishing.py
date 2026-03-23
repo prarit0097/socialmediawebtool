@@ -9,6 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from scheduler.models import PostLog, PublishingTarget, SocialAccount
+from scheduler.services.ai import AIServiceError, build_ai_caption_for_media
 from scheduler.services.cache import get_cached_public_urls
 from scheduler.services.diagnostics import build_rejection_diagnostics
 from scheduler.services.drive import (
@@ -150,7 +151,15 @@ def _slot_is_complete(target: PublishingTarget, scheduled_for, active_platforms:
     return slot_successes == active_platforms
 
 
-def build_caption(target: PublishingTarget) -> str:
+def build_caption(target: PublishingTarget, file_obj: dict | None = None) -> str:
+    if file_obj and target.ai_enabled and target.ai_auto_caption_enabled:
+        try:
+            ai_caption = build_ai_caption_for_media(target, file_obj)
+            if ai_caption:
+                return ai_caption.replace("\r\n", "\n").replace("\r", "\n")
+        except AIServiceError:
+            pass
+
     if target.default_caption.strip():
         return target.default_caption.strip().replace("\r\n", "\n").replace("\r", "\n")
 
@@ -176,7 +185,7 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     token = target.facebook_account.access_token or target.credential.access_token
     if not token:
         raise PublishingError("Facebook page access token not available.")
-    caption = build_caption(target) or file_obj["name"]
+    caption = build_caption(target, file_obj=file_obj) or file_obj["name"]
     media_urls = get_cached_public_urls(target, file_obj, variant="default")
     if not media_urls:
         media_urls = build_proxy_urls(target.id, file_obj["id"], file_obj.get("name", "media")) if is_public_base_ready() else []
@@ -220,7 +229,7 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
     token = target.instagram_account.access_token or page_token or target.credential.access_token
     if not token:
         raise PublishingError("Instagram publishing token not available.")
-    caption = build_caption(target) or file_obj["name"]
+    caption = build_caption(target, file_obj=file_obj) or file_obj["name"]
     errors = []
     mime_type = file_obj.get("mimeType", "")
     variant = "instagram_image" if mime_type.startswith("image/") else ""

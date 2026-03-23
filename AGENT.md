@@ -10,5 +10,6 @@
   - per-row Google Drive folder mapping
   - per-row daily posting frequency
   - 9 AM Telegram report of previous-day posting health and counts
+- Keep AI/API secrets env-based; do not store provider API keys through the public web UI.
 - Prefer implementation choices that can be hardened for production later.
 - When scanning or fixing the app, verify posting flow, report flow, and tests before closing the task.

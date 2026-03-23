@@ -20,6 +20,7 @@ A Django-based web application for automated posting from Google Drive to Facebo
 - target health view and recent post logs
 - daily scheduler and Telegram reporting commands
 - local ngrok helper scripts for public URL testing
+- optional OpenAI-compatible AI layer for captions, hashtags, rewrites, translations, duplicate warnings, classifications, suggestions, and AI report summaries
 
 ## Tech Stack
 - Python 3.10+
@@ -74,7 +75,22 @@ REPORT_HOUR=9
 SCHEDULER_POLL_SECONDS=60
 INSTAGRAM_CONTAINER_POLL_SECONDS=5
 INSTAGRAM_CONTAINER_MAX_POLLS=24
+AI_API_KEY=
+AI_API_BASE_URL=https://api.openai.com/v1
+AI_MODEL=gpt-5-mini
+AI_TIMEOUT_SECONDS=90
 ```
+
+## AI Features
+If you configure `AI_API_KEY`, the app can:
+- generate captions and hashtags for the next media file
+- create short, long, Hindi, English, and Hinglish rewrites
+- classify content by category and tags
+- warn about likely duplicates or low-quality/spammy media context
+- suggest better posting times from past success logs
+- enhance the Telegram daily report with an AI summary
+
+These controls are available on each target detail page under `AI Settings` and `AI Workspace`.
 
 ## Google Drive Requirements
 - share the Drive folder with `GOOGLE_SERVICE_ACCOUNT_EMAIL`

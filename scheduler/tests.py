@@ -6,6 +6,7 @@ from django.test.utils import override_settings
 from .forms import PublishingTargetForm
 from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
+from .services.ai import get_or_generate_media_insight
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.publishing import _platform_already_succeeded_for_file, _slot_is_complete, get_daily_slots, pick_next_shared_file, publish_due_targets
@@ -136,6 +137,24 @@ class DiagnosticsTest(TestCase):
         )
         self.assertIn("Possible causes:", message)
         self.assertIn("video/mp4", message)
+
+
+class AIServiceTest(TestCase):
+    def test_ai_insight_falls_back_to_heuristics_without_api_key(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:ai1",
+            display_name="AI Target",
+            drive_folder_id="folder",
+            default_caption="Base caption",
+        )
+        file_obj = {"id": "file1", "name": "Ayurveda Healing Tips 01.mp4", "mimeType": "video/mp4"}
+        insight = get_or_generate_media_insight(target, file_obj=file_obj, force=True)
+        self.assertEqual(insight.drive_file_id, "file1")
+        self.assertEqual(insight.primary_caption, "Base caption")
+        self.assertTrue(insight.best_posting_times)
+        self.assertIn(insight.duplicate_risk, {"low", "medium", "high"})
 
 
 class SharedQueueTest(TestCase):

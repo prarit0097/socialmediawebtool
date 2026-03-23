@@ -30,6 +30,10 @@ class PublishingTargetForm(forms.ModelForm):
             "posting_window_start",
             "posting_window_end",
             "default_caption",
+            "ai_enabled",
+            "ai_auto_caption_enabled",
+            "ai_language",
+            "ai_tone",
             "is_active",
         ]
         widgets = {
@@ -38,12 +42,16 @@ class PublishingTargetForm(forms.ModelForm):
             "posting_window_start": forms.TimeInput(attrs={"type": "time"}),
             "posting_window_end": forms.TimeInput(attrs={"type": "time"}),
             "default_caption": forms.Textarea(attrs={"rows": 4, "placeholder": "Optional default caption"}),
+            "ai_language": forms.TextInput(attrs={"placeholder": "Hinglish / Hindi / English"}),
+            "ai_tone": forms.TextInput(attrs={"placeholder": "Professional / Warm / Promotional"}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         initial_times = self.instance.posting_times or self._build_default_times()
         self.fields["posting_times_json"].initial = json.dumps(initial_times)
+        self.fields["ai_language"].required = False
+        self.fields["ai_tone"].required = False
 
     def _build_default_times(self):
         count = max(self.instance.posts_per_day or 1, 1)
@@ -98,6 +106,8 @@ class PublishingTargetForm(forms.ModelForm):
     def save(self, commit=True):
         instance = super().save(commit=False)
         instance.posting_times = self.cleaned_data.get("posting_times", [])
+        instance.ai_language = (self.cleaned_data.get("ai_language") or "Hinglish").strip() or "Hinglish"
+        instance.ai_tone = (self.cleaned_data.get("ai_tone") or "Professional").strip() or "Professional"
         if commit:
             instance.save()
         return instance

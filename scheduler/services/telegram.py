@@ -8,6 +8,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from scheduler.models import DailyReportLog, PostLog, PublishingTarget
+from scheduler.services.ai import ai_is_configured, build_ai_report_summary
 
 
 def _day_bounds(report_date):
@@ -115,6 +116,14 @@ def build_daily_report_message(report_date):
 
     if not active_targets:
         lines.extend(["", "No active targets configured."])
+
+    if ai_is_configured():
+        try:
+            ai_summary = build_ai_report_summary(report_date, lines)
+        except Exception:
+            ai_summary = ""
+        if ai_summary:
+            lines.extend(["", "AI SUMMARY", ai_summary])
 
     return "\n".join(lines)
 
