@@ -197,3 +197,4 @@ python manage.py run_scheduler
 - Google `api_core` ka Python 3.10 `FutureWarning` targeted tarike se suppress kiya gaya taaki runtime output clean rahe, bina project behavior change kiye.
 - AI layer me cross-provider fallback support add ki gayi: ab primary provider `Ollama` aur fallback provider `OpenAI` alag base URL aur alag API key ke saath configure kiye ja sakte hain.
 - `.env.example` aur `README.md` me `AI_FALLBACK_API_KEY` aur `AI_FALLBACK_API_BASE_URL` document kiye gaye, saath hi `Ollama primary + OpenAI fallback` ka exact sample config bhi add kiya gaya.
+- AI insight raw payload me ab provider/model metadata bhi save hoti hai, taaki target page par dikh sake kaunsa AI model actually use hua tha.

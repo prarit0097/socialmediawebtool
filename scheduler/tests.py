@@ -150,6 +150,28 @@ class AIServiceTest(TestCase):
     @override_settings(
         AI_API_KEY="ollama",
         AI_API_BASE_URL="http://127.0.0.1:11434/v1",
+        AI_MODEL="llama3.2:latest",
+    )
+    def test_successful_ai_response_keeps_provider_metadata(self):
+        from unittest.mock import MagicMock, patch
+
+        from .services.ai import _call_openai_json
+
+        success = MagicMock()
+        success.status_code = 200
+        success.json.return_value = {"output_text": '{"primary_caption":"ok"}'}
+
+        with patch("scheduler.services.ai.requests.post", return_value=success):
+            payload = _call_openai_json("system", "user")
+
+        self.assertEqual(payload["primary_caption"], "ok")
+        self.assertEqual(payload["_ai_meta"]["requested_model"], "llama3.2:latest")
+        self.assertEqual(payload["_ai_meta"]["resolved_model"], "llama3.2:latest")
+        self.assertEqual(payload["_ai_meta"]["provider_base_url"], "http://127.0.0.1:11434/v1")
+
+    @override_settings(
+        AI_API_KEY="ollama",
+        AI_API_BASE_URL="http://127.0.0.1:11434/v1",
         AI_MODEL="llama3.2",
         AI_FALLBACK_API_KEY="test-openai-key",
         AI_FALLBACK_API_BASE_URL="https://api.openai.com/v1",

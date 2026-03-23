@@ -197,7 +197,17 @@ def _call_openai_json(system_prompt: str, user_prompt: str) -> dict:
 
         raw_text = _strip_json_block(_json_response_text(data))
         try:
-            return json.loads(raw_text)
+            parsed = json.loads(raw_text)
+            if isinstance(parsed, dict):
+                parsed.setdefault(
+                    "_ai_meta",
+                    {
+                        "provider_base_url": base_url,
+                        "requested_model": model_name,
+                        "resolved_model": request_model,
+                    },
+                )
+            return parsed
         except json.JSONDecodeError as exc:
             errors.append(f"{model_name}: AI response was not valid JSON: {exc}")
 
