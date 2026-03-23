@@ -11,6 +11,9 @@ import os
 
 from django.core.asgi import get_asgi_application
 
+from social_poster.runtime_warnings import suppress_known_runtime_warnings
+
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'social_poster.settings')
+suppress_known_runtime_warnings()
 
 application = get_asgi_application()

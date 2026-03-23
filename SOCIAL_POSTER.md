@@ -194,3 +194,4 @@ python manage.py run_scheduler
 - Real OpenAI key testing ke dauran `.env` me `AI_API_KEY` aur `AI_API_BASE_URL` lines ulta paste hui mili; local config ko sahi kiya gaya.
 - OpenAI-compatible base URL ke liye model-name normalization add ki gayi: agar config me `openai/gpt-4.1-nano` ya `openai/gpt-4.1-mini` likha ho to OpenAI API call me automatically `gpt-4.1-nano` aur `gpt-4.1-mini` send kiya jayega.
 - Live provider verification me minimal JSON response aur AI-enhanced daily report summary dono successful chale.
+- Google `api_core` ka Python 3.10 `FutureWarning` targeted tarike se suppress kiya gaya taaki runtime output clean rahe, bina project behavior change kiye.

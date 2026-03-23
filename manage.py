@@ -3,9 +3,12 @@
 import os
 import sys
 
+from social_poster.runtime_warnings import suppress_known_runtime_warnings
+
 
 def main():
     """Run administrative tasks."""
+    suppress_known_runtime_warnings()
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'social_poster.settings')
     try:
         from django.core.management import execute_from_command_line
