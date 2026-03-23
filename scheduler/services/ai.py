@@ -76,6 +76,93 @@ def _strip_json_block(text: str) -> str:
     return text
 
 
+def _coerce_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(_coerce_text(item) for item in value if _coerce_text(item)).strip()
+    if isinstance(value, dict):
+        return value.get("text", "") if isinstance(value.get("text"), str) else json.dumps(value, ensure_ascii=False)
+    return str(value).strip()
+
+
+def _coerce_list(value, *, prefix: str = "") -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        items = [_coerce_text(item) for item in value]
+    else:
+        text = _coerce_text(value)
+        if prefix == "#":
+            text = text.replace(",", " ")
+            items = [token.strip() for token in text.split() if token.strip()]
+        else:
+            text = text.replace("\n", ",")
+            items = [token.strip() for token in text.split(",") if token.strip()]
+    cleaned = []
+    for item in items:
+        if not item:
+            continue
+        token = item
+        if prefix == "#" and not token.startswith("#"):
+            token = f"#{token.lstrip('#')}"
+        cleaned.append(token)
+    return cleaned
+
+
+def _normalize_ai_payload(payload: dict, target: PublishingTarget, file_obj: dict, best_times: list[str], best_reason: str) -> dict:
+    normalized = dict(payload or {})
+    normalized["primary_caption"] = _coerce_text(normalized.get("primary_caption"))
+    normalized["short_caption"] = _coerce_text(normalized.get("short_caption"))
+    normalized["long_caption"] = _coerce_text(normalized.get("long_caption"))
+    normalized["hindi_caption"] = _coerce_text(normalized.get("hindi_caption"))
+    normalized["english_caption"] = _coerce_text(normalized.get("english_caption"))
+    normalized["hinglish_caption"] = _coerce_text(normalized.get("hinglish_caption"))
+    normalized["translated_hindi"] = _coerce_text(normalized.get("translated_hindi"))
+    normalized["translated_english"] = _coerce_text(normalized.get("translated_english"))
+    normalized["translated_hinglish"] = _coerce_text(normalized.get("translated_hinglish"))
+    normalized["report_summary"] = _coerce_text(normalized.get("report_summary"))
+    normalized["duplicate_reason"] = _coerce_text(normalized.get("duplicate_reason"))
+    normalized["best_posting_reason"] = _coerce_text(normalized.get("best_posting_reason")) or best_reason
+    normalized["primary_category"] = _coerce_text(normalized.get("primary_category")) or "general"
+    normalized["hashtags"] = _coerce_list(normalized.get("hashtags"), prefix="#")
+    normalized["secondary_tags"] = _coerce_list(normalized.get("secondary_tags"))
+    normalized["quality_issues"] = _coerce_list(normalized.get("quality_issues"))
+    normalized["best_posting_times"] = _coerce_list(normalized.get("best_posting_times")) or best_times
+    normalized["safe_to_post"] = bool(normalized.get("safe_to_post", True))
+    return normalized
+
+
+def _payload_quality_errors(payload: dict, file_obj: dict) -> list[str]:
+    issues = []
+    file_stem = Path(file_obj.get("name", "")).stem.strip().lower()
+    primary_caption = _coerce_text(payload.get("primary_caption"))
+    if not primary_caption:
+        issues.append("primary_caption missing")
+    elif file_stem and primary_caption.strip().lower() == file_stem:
+        issues.append("primary_caption looks like raw filename")
+
+    hashtags = _coerce_list(payload.get("hashtags"), prefix="#")
+    if len(hashtags) < 2:
+        issues.append("not enough hashtags")
+
+    rewrite_fields = [
+        _coerce_text(payload.get("short_caption")),
+        _coerce_text(payload.get("long_caption")),
+        _coerce_text(payload.get("hindi_caption")),
+        _coerce_text(payload.get("english_caption")),
+        _coerce_text(payload.get("hinglish_caption")),
+        _coerce_text(payload.get("translated_hindi")),
+        _coerce_text(payload.get("translated_english")),
+        _coerce_text(payload.get("translated_hinglish")),
+    ]
+    populated_rewrites = sum(1 for value in rewrite_fields if value and value != "-")
+    if populated_rewrites < 4:
+        issues.append("too many rewrite/translation fields missing")
+
+    return issues
+
+
 def _best_posting_time_stats(target: PublishingTarget) -> tuple[list[str], str]:
     success_logs = target.post_logs.filter(status=PostLog.STATUS_SUCCESS).exclude(published_at=None).values_list("scheduled_for", flat=True)
     counts = Counter()
@@ -242,15 +329,49 @@ def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:
         f"Heuristic best posting times: {best_times} ({best_reason})\n"
         "Generate smart posting guidance for health/wellness social media use."
     )
-    ai_data = _call_openai_json(system_prompt, user_prompt)
-    ai_data.setdefault("duplicate_risk", duplicate_risk)
-    ai_data.setdefault("duplicate_reason", duplicate_reason)
-    ai_data.setdefault("quality_risk", quality_risk)
-    ai_data.setdefault("quality_issues", quality_issues)
-    ai_data.setdefault("safe_to_post", safe_to_post)
-    ai_data.setdefault("best_posting_times", best_times)
-    ai_data.setdefault("best_posting_reason", best_reason)
-    return ai_data
+    candidates = _build_model_candidates()
+    candidate_errors = []
+    for index, candidate in enumerate(candidates):
+        original_model = settings.AI_MODEL
+        original_base = settings.AI_API_BASE_URL
+        original_key = settings.AI_API_KEY
+        original_fallback_model = settings.AI_FALLBACK_MODEL
+        original_fallback_base = settings.AI_FALLBACK_API_BASE_URL
+        original_fallback_key = settings.AI_FALLBACK_API_KEY
+        try:
+            settings.AI_MODEL = candidate["model"]
+            settings.AI_API_BASE_URL = candidate["base_url"]
+            settings.AI_API_KEY = candidate["api_key"]
+            settings.AI_FALLBACK_MODEL = ""
+            settings.AI_FALLBACK_API_BASE_URL = ""
+            settings.AI_FALLBACK_API_KEY = ""
+            ai_data = _call_openai_json(system_prompt, user_prompt)
+            ai_data = _normalize_ai_payload(ai_data, target, file_obj, best_times, best_reason)
+            quality_errors = _payload_quality_errors(ai_data, file_obj)
+            if quality_errors and index < len(candidates) - 1:
+                candidate_errors.append(f"{candidate['model']}: weak output ({', '.join(quality_errors)})")
+                continue
+            ai_data.setdefault("duplicate_risk", duplicate_risk)
+            ai_data.setdefault("duplicate_reason", duplicate_reason)
+            ai_data.setdefault("quality_risk", quality_risk)
+            ai_data.setdefault("quality_issues", quality_issues)
+            ai_data.setdefault("safe_to_post", safe_to_post)
+            ai_data.setdefault("best_posting_times", best_times)
+            ai_data.setdefault("best_posting_reason", best_reason)
+            if quality_errors:
+                ai_data["quality_issues"] = list(dict.fromkeys(_coerce_list(ai_data.get("quality_issues")) + quality_errors))
+            return ai_data
+        except AIServiceError as exc:
+            candidate_errors.append(str(exc))
+        finally:
+            settings.AI_MODEL = original_model
+            settings.AI_API_BASE_URL = original_base
+            settings.AI_API_KEY = original_key
+            settings.AI_FALLBACK_MODEL = original_fallback_model
+            settings.AI_FALLBACK_API_BASE_URL = original_fallback_base
+            settings.AI_FALLBACK_API_KEY = original_fallback_key
+
+    raise AIServiceError(" | ".join(candidate_errors))
 
 
 def get_or_generate_media_insight(target: PublishingTarget, file_obj: dict | None = None, force: bool = False) -> AIMediaInsight:

@@ -199,3 +199,4 @@ python manage.py run_scheduler
 - `.env.example` aur `README.md` me `AI_FALLBACK_API_KEY` aur `AI_FALLBACK_API_BASE_URL` document kiye gaye, saath hi `Ollama primary + OpenAI fallback` ka exact sample config bhi add kiya gaya.
 - AI insight raw payload me ab provider/model metadata bhi save hoti hai, taaki target page par dikh sake kaunsa AI model actually use hua tha.
 - Target detail page par AI model metadata dikhate waqt Django template underscore-key access error aa rahi thi; metadata ko view context me flatten karke issue fix kiya gaya.
+- Weak ya malformed Ollama AI output ke liye normalization aur quality gate add ki gayi: agar caption raw filename jaisi ho, hashtags/rewrite fields bohot weak hon, ya field shapes galat hon to app better structured fallback response try karegi.

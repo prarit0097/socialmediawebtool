@@ -7,7 +7,7 @@ from django.urls import reverse
 from .forms import PublishingTargetForm
 from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
-from .services.ai import _build_model_candidates, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
+from .services.ai import _build_model_candidates, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.publishing import _platform_already_succeeded_for_file, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
@@ -169,6 +169,48 @@ class AIServiceTest(TestCase):
         self.assertEqual(payload["_ai_meta"]["resolved_model"], "llama3.2:latest")
         self.assertEqual(payload["_ai_meta"]["provider_base_url"], "http://127.0.0.1:11434/v1")
 
+    def test_normalize_ai_payload_cleans_list_and_text_shapes(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(credential=credential, sync_key="fb:norm", display_name="Norm")
+        payload = _normalize_ai_payload(
+            {
+                "primary_caption": ["Line 1", "Line 2"],
+                "hashtags": "#a #b",
+                "quality_issues": "issue one, issue two",
+                "secondary_tags": "tag1, tag2",
+                "best_posting_times": "09:00, 18:00",
+            },
+            target,
+            {"name": "POST1.jpeg"},
+            ["10:00"],
+            "fallback reason",
+        )
+        self.assertEqual(payload["primary_caption"], "Line 1\nLine 2")
+        self.assertEqual(payload["hashtags"], ["#a", "#b"])
+        self.assertEqual(payload["quality_issues"], ["issue one", "issue two"])
+        self.assertEqual(payload["secondary_tags"], ["tag1", "tag2"])
+        self.assertEqual(payload["best_posting_times"], ["09:00", "18:00"])
+
+    def test_payload_quality_errors_flags_filename_like_and_sparse_output(self):
+        errors = _payload_quality_errors(
+            {
+                "primary_caption": "POST92",
+                "hashtags": "#one",
+                "short_caption": "",
+                "long_caption": "",
+                "hindi_caption": "",
+                "english_caption": "",
+                "hinglish_caption": "",
+                "translated_hindi": "",
+                "translated_english": "",
+                "translated_hinglish": "",
+            },
+            {"name": "POST92.mp4"},
+        )
+        self.assertIn("primary_caption looks like raw filename", errors)
+        self.assertIn("not enough hashtags", errors)
+        self.assertIn("too many rewrite/translation fields missing", errors)
+
     @override_settings(
         AI_API_KEY="ollama",
         AI_API_BASE_URL="http://127.0.0.1:11434/v1",
@@ -232,6 +274,71 @@ class AIServiceTest(TestCase):
         self.assertEqual(post_mock.call_args_list[0].args[0], "http://127.0.0.1:11434/v1/responses")
         self.assertEqual(post_mock.call_args_list[1].kwargs["json"]["model"], "gpt-4.1-mini")
         self.assertEqual(post_mock.call_args_list[1].args[0], "https://api.openai.com/v1/responses")
+
+    @override_settings(
+        AI_API_KEY="ollama",
+        AI_API_BASE_URL="http://127.0.0.1:11434/v1",
+        AI_MODEL="llama3.2:latest",
+        AI_FALLBACK_API_KEY="test-openai-key",
+        AI_FALLBACK_API_BASE_URL="https://api.openai.com/v1",
+        AI_FALLBACK_MODEL="openai/gpt-4.1-mini",
+    )
+    def test_ai_payload_uses_fallback_when_primary_output_is_weak(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:weak1",
+            display_name="Weak Output",
+            drive_folder_id="folder",
+            ai_enabled=True,
+        )
+        weak_payload = {
+            "primary_caption": "500+ Viral Health Awareness Reels by Digital Ceo Official92",
+            "hashtags": "#one",
+            "short_caption": "short",
+            "long_caption": "",
+            "hindi_caption": "",
+            "english_caption": "",
+            "hinglish_caption": "",
+            "translated_hindi": "",
+            "translated_english": "",
+            "translated_hinglish": "",
+            "_ai_meta": {
+                "provider_base_url": "http://127.0.0.1:11434/v1",
+                "requested_model": "llama3.2:latest",
+                "resolved_model": "llama3.2:latest",
+            },
+        }
+        strong_payload = {
+            "primary_caption": "Strong caption",
+            "hashtags": ["#one", "#two", "#three"],
+            "short_caption": "Short",
+            "long_caption": "Long enough",
+            "hindi_caption": "Hindi text",
+            "english_caption": "English text",
+            "hinglish_caption": "Hinglish text",
+            "translated_hindi": "Hindi translation",
+            "translated_english": "English translation",
+            "translated_hinglish": "Hinglish translation",
+            "primary_category": "wellness",
+            "_ai_meta": {
+                "provider_base_url": "https://api.openai.com/v1",
+                "requested_model": "openai/gpt-4.1-mini",
+                "resolved_model": "gpt-4.1-mini",
+            },
+        }
+
+        with patch("scheduler.services.ai._call_openai_json", side_effect=[weak_payload, strong_payload]):
+            insight = get_or_generate_media_insight(
+                target,
+                file_obj={"id": "file-weak", "name": "500+ Viral Health Awareness Reels by Digital Ceo Official92.mp4", "mimeType": "video/mp4"},
+                force=True,
+            )
+
+        self.assertEqual(insight.primary_caption, "Strong caption")
+        self.assertEqual(insight.raw_payload["_ai_meta"]["requested_model"], "openai/gpt-4.1-mini")
 
     @override_settings(AI_API_KEY="test-key")
     def test_ai_insight_populates_requested_feature_fields(self):
