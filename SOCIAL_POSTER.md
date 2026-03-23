@@ -202,3 +202,4 @@ python manage.py run_scheduler
 - Live domain par form submit karte waqt `403 CSRF verification failed` issue fix kiya gaya. Ab `PUBLIC_APP_BASE_URL` se domain automatically trusted origin ban jata hai, aur optional extra origins `DJANGO_CSRF_TRUSTED_ORIGINS` se add kiye ja sakte hain.
 - Meta Graph API ke liye timeout aur retry settings add ki gayi hain. Ab Facebook/Instagram call me short network/read timeout aane par request turant fail hone ke bajay configured retry ke saath dubara try kar sakti hai.
 - Facebook Graph response parsing ko harden kiya gaya hai. Agar Meta empty ya non-JSON response de, to app generic `Expecting value...` parser error dikhane ke bajay actual HTTP status aur response snippet log karegi.
+- `Test Post Now` ko background mode me shift kiya gaya hai. Ab button click karte hi browser request latakne ke bajay page turant redirect ho jata hai, aur posting backend thread me chalti hai. Status dekhne ke liye page refresh ki ja sakti hai.

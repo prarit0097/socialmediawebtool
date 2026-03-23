@@ -557,6 +557,30 @@ class AIViewFlowTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "openai/gpt-4.1-mini")
 
+    def test_test_post_starts_in_background_and_redirects(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:view3",
+            display_name="Async Test Post",
+            drive_folder_id="folder",
+        )
+
+        with patch("scheduler.views.threading.Thread") as thread_mock:
+            response = self.client.post(
+                reverse("scheduler:target_detail", args=[target.pk]),
+                {"action": "test_post"},
+                follow=True,
+            )
+
+        target.refresh_from_db()
+        self.assertEqual(target.last_status, "running")
+        self.assertEqual(target.last_error, "")
+        thread_mock.assert_called_once()
+        self.assertContains(response, "Test post started in background.")
+
 
 class SharedQueueTest(TestCase):
     def test_same_file_is_retained_until_all_platforms_succeed(self):

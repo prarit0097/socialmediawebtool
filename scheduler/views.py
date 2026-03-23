@@ -1,6 +1,8 @@
 from pathlib import Path
+import threading
 
 from django.db.models import Count, Q
+from django.db import close_old_connections
 from django.http import FileResponse, HttpResponse
 from django.core.signing import BadSignature, SignatureExpired
 from django.contrib import messages
@@ -18,6 +20,17 @@ from .services.meta import MetaAPIError, sync_credential_accounts
 from .services.publishing import PublishingError, publish_due_targets, publish_target_now
 from .services.proxy import unsign_media_token
 from .services.telegram import send_daily_report
+
+
+def _run_test_post_async(target_id: int) -> None:
+    close_old_connections()
+    try:
+        target = PublishingTarget.objects.select_related("facebook_account", "instagram_account", "credential").get(pk=target_id)
+        publish_target_now(target)
+    except Exception as exc:
+        PublishingTarget.objects.filter(pk=target_id).update(last_status="failed", last_error=str(exc))
+    finally:
+        close_old_connections()
 
 
 @require_http_methods(["GET", "POST"])
@@ -93,15 +106,11 @@ def target_detail(request, pk):
     if request.method == "POST":
         action = request.POST.get("action", "save")
         if action == "test_post":
-            try:
-                publish_target_now(target)
-                target.refresh_from_db(fields=["last_status", "last_error"])
-                if target.last_status == "success":
-                    messages.success(request, "Test post completed successfully on all active platforms.")
-                else:
-                    messages.warning(request, f"Test post ran, but some platform still needs attention: {target.last_error}")
-            except Exception as exc:
-                messages.error(request, f"Test post failed: {exc}")
+            target.last_status = "running"
+            target.last_error = ""
+            target.save(update_fields=["last_status", "last_error", "updated_at"])
+            threading.Thread(target=_run_test_post_async, args=(target.pk,), daemon=True).start()
+            messages.success(request, "Test post started in background. Page ko refresh karke latest status/logs dekh sakte ho.")
             return redirect("scheduler:target_detail", pk=target.pk)
         if action == "generate_ai_insight":
             try:
