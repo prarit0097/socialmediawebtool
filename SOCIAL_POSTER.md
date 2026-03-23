@@ -200,3 +200,4 @@ python manage.py run_scheduler
 - Ollama support remove kar di gayi aur AI layer ko phir se pure OpenAI mode me simplify kiya gaya. Ab app `openai/gpt-4.1-nano` ko primary aur `openai/gpt-4.1-mini` ko fallback model ke roop me use karti hai.
 - Weak ya malformed AI output ke liye normalization aur quality gate active rakhi gayi hai, taaki poor structured responses ke baad same provider par better fallback model try kiya ja sake.
 - Live domain par form submit karte waqt `403 CSRF verification failed` issue fix kiya gaya. Ab `PUBLIC_APP_BASE_URL` se domain automatically trusted origin ban jata hai, aur optional extra origins `DJANGO_CSRF_TRUSTED_ORIGINS` se add kiye ja sakte hain.
+- Meta Graph API ke liye timeout aur retry settings add ki gayi hain. Ab Facebook/Instagram call me short network/read timeout aane par request turant fail hone ke bajay configured retry ke saath dubara try kar sakti hai.

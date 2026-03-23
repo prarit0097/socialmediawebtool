@@ -29,8 +29,25 @@ class PublishingError(Exception):
     pass
 
 
+def _request_with_retries(method: str, url: str, **kwargs):
+    last_exc = None
+    for attempt in range(settings.META_GRAPH_RETRY_COUNT + 1):
+        try:
+            return requests.request(method, url, timeout=settings.META_GRAPH_TIMEOUT_SECONDS, **kwargs)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc
+            if attempt >= settings.META_GRAPH_RETRY_COUNT:
+                break
+            time.sleep(settings.META_GRAPH_RETRY_SLEEP_SECONDS)
+    raise PublishingError(f"Meta request failed after retries: {last_exc}")
+
+
 def _graph_post(path: str, access_token: str, payload: dict) -> dict:
-    response = requests.post(f"{settings.META_GRAPH_BASE_URL}{path}", data={**payload, "access_token": access_token}, timeout=60)
+    response = _request_with_retries(
+        "post",
+        f"{settings.META_GRAPH_BASE_URL}{path}",
+        data={**payload, "access_token": access_token},
+    )
     data = response.json()
     if response.status_code >= 400 or data.get("error"):
         message = data.get("error", {}).get("message", response.text)
@@ -42,7 +59,11 @@ def _graph_get(path: str, access_token: str, params: dict | None = None) -> dict
     query = {"access_token": access_token}
     if params:
         query.update(params)
-    response = requests.get(f"{settings.META_GRAPH_BASE_URL}{path}", params=query, timeout=60)
+    response = _request_with_retries(
+        "get",
+        f"{settings.META_GRAPH_BASE_URL}{path}",
+        params=query,
+    )
     data = response.json()
     if response.status_code >= 400 or data.get("error"):
         message = data.get("error", {}).get("message", response.text)
