@@ -156,6 +156,32 @@ class AIServiceTest(TestCase):
         self.assertTrue(insight.best_posting_times)
         self.assertIn(insight.duplicate_risk, {"low", "medium", "high"})
 
+    @override_settings(
+        AI_API_KEY="test-key",
+        AI_MODEL="openai/gpt-4.1-nano",
+        AI_FALLBACK_MODEL="openai/gpt-4.1-mini",
+        AI_API_BASE_URL="https://api.openai.com/v1",
+    )
+    def test_ai_service_uses_fallback_model_when_primary_fails(self):
+        from unittest.mock import MagicMock, patch
+
+        from .services.ai import _call_openai_json
+
+        failed = MagicMock()
+        failed.status_code = 400
+        failed.json.return_value = {"error": {"message": "primary failed"}}
+
+        success = MagicMock()
+        success.status_code = 200
+        success.json.return_value = {"output_text": '{"primary_caption":"ok"}'}
+
+        with patch("scheduler.services.ai.requests.post", side_effect=[failed, success]) as post_mock:
+            payload = _call_openai_json("system", "user")
+
+        self.assertEqual(payload["primary_caption"], "ok")
+        self.assertEqual(post_mock.call_args_list[0].kwargs["json"]["model"], "openai/gpt-4.1-nano")
+        self.assertEqual(post_mock.call_args_list[1].kwargs["json"]["model"], "openai/gpt-4.1-mini")
+
 
 class SharedQueueTest(TestCase):
     def test_same_file_is_retained_until_all_platforms_succeed(self):

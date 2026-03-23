@@ -126,31 +126,40 @@ def _call_openai_json(system_prompt: str, user_prompt: str) -> dict:
     if not ai_is_configured():
         raise AIServiceError("AI_API_KEY is not configured.")
 
-    response = requests.post(
-        f"{settings.AI_API_BASE_URL.rstrip('/')}/responses",
-        headers={
-            "Authorization": f"Bearer {settings.AI_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": settings.AI_MODEL,
-            "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
-                {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
-            ],
-        },
-        timeout=settings.AI_TIMEOUT_SECONDS,
-    )
-    data = response.json()
-    if response.status_code >= 400 or data.get("error"):
-        message = data.get("error", {}).get("message", response.text)
-        raise AIServiceError(message)
+    models_to_try = [settings.AI_MODEL]
+    if settings.AI_FALLBACK_MODEL and settings.AI_FALLBACK_MODEL not in models_to_try:
+        models_to_try.append(settings.AI_FALLBACK_MODEL)
 
-    raw_text = _strip_json_block(_json_response_text(data))
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise AIServiceError(f"AI response was not valid JSON: {exc}")
+    errors = []
+    for model_name in models_to_try:
+        response = requests.post(
+            f"{settings.AI_API_BASE_URL.rstrip('/')}/responses",
+            headers={
+                "Authorization": f"Bearer {settings.AI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model_name,
+                "input": [
+                    {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+                    {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
+                ],
+            },
+            timeout=settings.AI_TIMEOUT_SECONDS,
+        )
+        data = response.json()
+        if response.status_code >= 400 or data.get("error"):
+            message = data.get("error", {}).get("message", response.text)
+            errors.append(f"{model_name}: {message}")
+            continue
+
+        raw_text = _strip_json_block(_json_response_text(data))
+        try:
+            return json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            errors.append(f"{model_name}: AI response was not valid JSON: {exc}")
+
+    raise AIServiceError(" | ".join(errors))
 
 
 def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:

@@ -73,11 +73,13 @@ TELEGRAM_BOT_TOKEN=123456:abc
 TELEGRAM_CHAT_ID=123456789
 REPORT_HOUR=9
 SCHEDULER_POLL_SECONDS=60
+SCHEDULER_CATCHUP_MINUTES=60
 INSTAGRAM_CONTAINER_POLL_SECONDS=5
 INSTAGRAM_CONTAINER_MAX_POLLS=24
-AI_API_KEY=
+AI_API_KEY=PASTE_YOUR_OPENAI_KEY_HERE
 AI_API_BASE_URL=https://api.openai.com/v1
-AI_MODEL=gpt-5-mini
+AI_MODEL=openai/gpt-4.1-nano
+AI_FALLBACK_MODEL=openai/gpt-4.1-mini
 AI_TIMEOUT_SECONDS=90
 ```
 
@@ -91,6 +93,10 @@ If you configure `AI_API_KEY`, the app can:
 - enhance the Telegram daily report with an AI summary
 
 These controls are available on each target detail page under `AI Settings` and `AI Workspace`.
+
+Default AI model order in this repo:
+- primary: `openai/gpt-4.1-nano`
+- fallback: `openai/gpt-4.1-mini`
 
 ## Google Drive Requirements
 - share the Drive folder with `GOOGLE_SERVICE_ACCOUNT_EMAIL`
