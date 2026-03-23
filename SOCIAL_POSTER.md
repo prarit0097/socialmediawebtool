@@ -183,3 +183,4 @@ python manage.py run_scheduler
 - Video posts ke liye caption handling normalize ki gayi aur Facebook video publish payload me `title` bhi add kiya gaya, taaki text/caption visibility zyada consistent rahe.
 - Dashboard data loading optimize ki gayi: ab same target ka health data ek hi baar build hota hai aur multiple sections me reuse hota hai, jis se unnecessary Drive/API work kam hota hai.
 - AI foundation add ki gayi: OpenAI-compatible API key ke saath caption generation, hashtags, rewrites, translations, duplicate/quality warnings, content classification, best-time suggestions, AI media insight cache, aur AI-enhanced Telegram summary ka base ready hai.
+- `.env` me AI config placeholders add kiye gaye (`AI_API_KEY`, `AI_API_BASE_URL`, `AI_MODEL`, `AI_TIMEOUT_SECONDS`, `SCHEDULER_CATCHUP_MINUTES`) taaki OpenAI key paste karke AI features turant use kiye ja sakein.
