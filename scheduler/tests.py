@@ -148,9 +148,9 @@ class AIServiceTest(TestCase):
         self.assertEqual(_resolve_model_name("gpt-4.1-mini", "https://api.openai.com/v1"), "gpt-4.1-mini")
 
     @override_settings(
-        AI_API_KEY="ollama",
-        AI_API_BASE_URL="http://127.0.0.1:11434/v1",
-        AI_MODEL="llama3.2:latest",
+        AI_API_KEY="test-key",
+        AI_API_BASE_URL="https://api.openai.com/v1",
+        AI_MODEL="openai/gpt-4.1-nano",
     )
     def test_successful_ai_response_keeps_provider_metadata(self):
         from unittest.mock import MagicMock, patch
@@ -165,9 +165,9 @@ class AIServiceTest(TestCase):
             payload = _call_openai_json("system", "user")
 
         self.assertEqual(payload["primary_caption"], "ok")
-        self.assertEqual(payload["_ai_meta"]["requested_model"], "llama3.2:latest")
-        self.assertEqual(payload["_ai_meta"]["resolved_model"], "llama3.2:latest")
-        self.assertEqual(payload["_ai_meta"]["provider_base_url"], "http://127.0.0.1:11434/v1")
+        self.assertEqual(payload["_ai_meta"]["requested_model"], "openai/gpt-4.1-nano")
+        self.assertEqual(payload["_ai_meta"]["resolved_model"], "gpt-4.1-nano")
+        self.assertEqual(payload["_ai_meta"]["provider_base_url"], "https://api.openai.com/v1")
 
     def test_normalize_ai_payload_cleans_list_and_text_shapes(self):
         credential = MetaCredential.objects.create(label="Test", access_token="token")
@@ -212,19 +212,17 @@ class AIServiceTest(TestCase):
         self.assertIn("too many rewrite/translation fields missing", errors)
 
     @override_settings(
-        AI_API_KEY="ollama",
-        AI_API_BASE_URL="http://127.0.0.1:11434/v1",
-        AI_MODEL="llama3.2",
-        AI_FALLBACK_API_KEY="test-openai-key",
-        AI_FALLBACK_API_BASE_URL="https://api.openai.com/v1",
+        AI_API_KEY="test-openai-key",
+        AI_API_BASE_URL="https://api.openai.com/v1",
+        AI_MODEL="openai/gpt-4.1-nano",
         AI_FALLBACK_MODEL="openai/gpt-4.1-mini",
     )
-    def test_build_model_candidates_supports_cross_provider_fallback(self):
+    def test_build_model_candidates_supports_openai_fallback(self):
         candidates = _build_model_candidates()
         self.assertEqual(
             candidates,
             [
-                {"model": "llama3.2", "base_url": "http://127.0.0.1:11434/v1", "api_key": "ollama"},
+                {"model": "openai/gpt-4.1-nano", "base_url": "https://api.openai.com/v1", "api_key": "test-openai-key"},
                 {"model": "openai/gpt-4.1-mini", "base_url": "https://api.openai.com/v1", "api_key": "test-openai-key"},
             ],
         )
@@ -246,14 +244,12 @@ class AIServiceTest(TestCase):
         self.assertIn(insight.duplicate_risk, {"low", "medium", "high"})
 
     @override_settings(
-        AI_API_KEY="ollama",
-        AI_API_BASE_URL="http://127.0.0.1:11434/v1",
-        AI_MODEL="llama3.2",
-        AI_FALLBACK_API_KEY="test-openai-key",
-        AI_FALLBACK_API_BASE_URL="https://api.openai.com/v1",
+        AI_API_KEY="test-openai-key",
+        AI_API_BASE_URL="https://api.openai.com/v1",
+        AI_MODEL="openai/gpt-4.1-nano",
         AI_FALLBACK_MODEL="openai/gpt-4.1-mini",
     )
-    def test_ai_service_uses_openai_fallback_when_primary_provider_fails(self):
+    def test_ai_service_uses_openai_fallback_when_primary_model_fails(self):
         from unittest.mock import MagicMock, patch
 
         from .services.ai import _call_openai_json
@@ -270,20 +266,18 @@ class AIServiceTest(TestCase):
             payload = _call_openai_json("system", "user")
 
         self.assertEqual(payload["primary_caption"], "ok")
-        self.assertEqual(post_mock.call_args_list[0].kwargs["json"]["model"], "llama3.2")
-        self.assertEqual(post_mock.call_args_list[0].args[0], "http://127.0.0.1:11434/v1/responses")
+        self.assertEqual(post_mock.call_args_list[0].kwargs["json"]["model"], "gpt-4.1-nano")
+        self.assertEqual(post_mock.call_args_list[0].args[0], "https://api.openai.com/v1/responses")
         self.assertEqual(post_mock.call_args_list[1].kwargs["json"]["model"], "gpt-4.1-mini")
         self.assertEqual(post_mock.call_args_list[1].args[0], "https://api.openai.com/v1/responses")
 
     @override_settings(
-        AI_API_KEY="ollama",
-        AI_API_BASE_URL="http://127.0.0.1:11434/v1",
-        AI_MODEL="llama3.2:latest",
-        AI_FALLBACK_API_KEY="test-openai-key",
-        AI_FALLBACK_API_BASE_URL="https://api.openai.com/v1",
+        AI_API_KEY="test-openai-key",
+        AI_API_BASE_URL="https://api.openai.com/v1",
+        AI_MODEL="openai/gpt-4.1-nano",
         AI_FALLBACK_MODEL="openai/gpt-4.1-mini",
     )
-    def test_ai_payload_uses_fallback_when_primary_output_is_weak(self):
+    def test_ai_payload_uses_openai_fallback_when_primary_output_is_weak(self):
         from unittest.mock import patch
 
         credential = MetaCredential.objects.create(label="Test", access_token="token")
@@ -306,9 +300,9 @@ class AIServiceTest(TestCase):
             "translated_english": "",
             "translated_hinglish": "",
             "_ai_meta": {
-                "provider_base_url": "http://127.0.0.1:11434/v1",
-                "requested_model": "llama3.2:latest",
-                "resolved_model": "llama3.2:latest",
+                "provider_base_url": "https://api.openai.com/v1",
+                "requested_model": "openai/gpt-4.1-nano",
+                "resolved_model": "gpt-4.1-nano",
             },
         }
         strong_payload = {

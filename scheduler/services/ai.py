@@ -18,7 +18,7 @@ class AIServiceError(Exception):
 
 
 def ai_is_configured() -> bool:
-    return bool(settings.AI_API_KEY.strip() or settings.AI_FALLBACK_API_KEY.strip())
+    return bool(settings.AI_API_KEY.strip())
 
 
 def _resolve_model_name(model_name: str, base_url: str) -> str:
@@ -40,14 +40,14 @@ def _build_model_candidates() -> list[dict]:
     if primary["model"] and primary["base_url"] and primary["api_key"]:
         candidates.append(primary)
 
-    fallback = {
-        "model": settings.AI_FALLBACK_MODEL,
-        "base_url": settings.AI_FALLBACK_API_BASE_URL or settings.AI_API_BASE_URL,
-        "api_key": settings.AI_FALLBACK_API_KEY or settings.AI_API_KEY,
-    }
-    if fallback["model"] and fallback["base_url"] and fallback["api_key"]:
-        if not candidates or fallback != candidates[0]:
-            candidates.append(fallback)
+    if settings.AI_FALLBACK_MODEL and settings.AI_FALLBACK_MODEL != settings.AI_MODEL:
+        candidates.append(
+            {
+                "model": settings.AI_FALLBACK_MODEL,
+                "base_url": settings.AI_API_BASE_URL,
+                "api_key": settings.AI_API_KEY,
+            }
+        )
 
     return candidates
 
@@ -336,15 +336,11 @@ def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:
         original_base = settings.AI_API_BASE_URL
         original_key = settings.AI_API_KEY
         original_fallback_model = settings.AI_FALLBACK_MODEL
-        original_fallback_base = settings.AI_FALLBACK_API_BASE_URL
-        original_fallback_key = settings.AI_FALLBACK_API_KEY
         try:
             settings.AI_MODEL = candidate["model"]
             settings.AI_API_BASE_URL = candidate["base_url"]
             settings.AI_API_KEY = candidate["api_key"]
             settings.AI_FALLBACK_MODEL = ""
-            settings.AI_FALLBACK_API_BASE_URL = ""
-            settings.AI_FALLBACK_API_KEY = ""
             ai_data = _call_openai_json(system_prompt, user_prompt)
             ai_data = _normalize_ai_payload(ai_data, target, file_obj, best_times, best_reason)
             quality_errors = _payload_quality_errors(ai_data, file_obj)
@@ -368,8 +364,6 @@ def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:
             settings.AI_API_BASE_URL = original_base
             settings.AI_API_KEY = original_key
             settings.AI_FALLBACK_MODEL = original_fallback_model
-            settings.AI_FALLBACK_API_BASE_URL = original_fallback_base
-            settings.AI_FALLBACK_API_KEY = original_fallback_key
 
     raise AIServiceError(" | ".join(candidate_errors))
 

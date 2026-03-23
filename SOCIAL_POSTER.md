@@ -195,8 +195,7 @@ python manage.py run_scheduler
 - OpenAI-compatible base URL ke liye model-name normalization add ki gayi: agar config me `openai/gpt-4.1-nano` ya `openai/gpt-4.1-mini` likha ho to OpenAI API call me automatically `gpt-4.1-nano` aur `gpt-4.1-mini` send kiya jayega.
 - Live provider verification me minimal JSON response aur AI-enhanced daily report summary dono successful chale.
 - Google `api_core` ka Python 3.10 `FutureWarning` targeted tarike se suppress kiya gaya taaki runtime output clean rahe, bina project behavior change kiye.
-- AI layer me cross-provider fallback support add ki gayi: ab primary provider `Ollama` aur fallback provider `OpenAI` alag base URL aur alag API key ke saath configure kiye ja sakte hain.
-- `.env.example` aur `README.md` me `AI_FALLBACK_API_KEY` aur `AI_FALLBACK_API_BASE_URL` document kiye gaye, saath hi `Ollama primary + OpenAI fallback` ka exact sample config bhi add kiya gaya.
 - AI insight raw payload me ab provider/model metadata bhi save hoti hai, taaki target page par dikh sake kaunsa AI model actually use hua tha.
 - Target detail page par AI model metadata dikhate waqt Django template underscore-key access error aa rahi thi; metadata ko view context me flatten karke issue fix kiya gaya.
-- Weak ya malformed Ollama AI output ke liye normalization aur quality gate add ki gayi: agar caption raw filename jaisi ho, hashtags/rewrite fields bohot weak hon, ya field shapes galat hon to app better structured fallback response try karegi.
+- Ollama support remove kar di gayi aur AI layer ko phir se pure OpenAI mode me simplify kiya gaya. Ab app `openai/gpt-4.1-nano` ko primary aur `openai/gpt-4.1-mini` ko fallback model ke roop me use karti hai.
+- Weak ya malformed AI output ke liye normalization aur quality gate active rakhi gayi hai, taaki poor structured responses ke baad same provider par better fallback model try kiya ja sake.
