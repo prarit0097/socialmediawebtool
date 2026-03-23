@@ -18,16 +18,38 @@ class AIServiceError(Exception):
 
 
 def ai_is_configured() -> bool:
-    return bool(settings.AI_API_KEY.strip())
+    return bool(settings.AI_API_KEY.strip() or settings.AI_FALLBACK_API_KEY.strip())
 
 
-def _resolve_model_name(model_name: str) -> str:
+def _resolve_model_name(model_name: str, base_url: str) -> str:
     model_name = (model_name or "").strip()
     if not model_name:
         return model_name
-    if settings.AI_API_BASE_URL.rstrip("/").lower().startswith("https://api.openai.com"):
+    if base_url.rstrip("/").lower().startswith("https://api.openai.com"):
         return model_name.split("/", 1)[1] if "/" in model_name else model_name
     return model_name
+
+
+def _build_model_candidates() -> list[dict]:
+    candidates = []
+    primary = {
+        "model": settings.AI_MODEL,
+        "base_url": settings.AI_API_BASE_URL,
+        "api_key": settings.AI_API_KEY,
+    }
+    if primary["model"] and primary["base_url"] and primary["api_key"]:
+        candidates.append(primary)
+
+    fallback = {
+        "model": settings.AI_FALLBACK_MODEL,
+        "base_url": settings.AI_FALLBACK_API_BASE_URL or settings.AI_API_BASE_URL,
+        "api_key": settings.AI_FALLBACK_API_KEY or settings.AI_API_KEY,
+    }
+    if fallback["model"] and fallback["base_url"] and fallback["api_key"]:
+        if not candidates or fallback != candidates[0]:
+            candidates.append(fallback)
+
+    return candidates
 
 
 def _normalize_text(value: str) -> str:
@@ -133,20 +155,23 @@ def _next_candidate_file(target: PublishingTarget) -> dict:
 
 def _call_openai_json(system_prompt: str, user_prompt: str) -> dict:
     if not ai_is_configured():
-        raise AIServiceError("AI_API_KEY is not configured.")
+        raise AIServiceError("No AI provider credentials are configured.")
 
-    models_to_try = [settings.AI_MODEL]
-    if settings.AI_FALLBACK_MODEL and settings.AI_FALLBACK_MODEL not in models_to_try:
-        models_to_try.append(settings.AI_FALLBACK_MODEL)
+    candidates = _build_model_candidates()
+    if not candidates:
+        raise AIServiceError("No AI model/base URL/api key combination is configured.")
 
     errors = []
-    for model_name in models_to_try:
-        request_model = _resolve_model_name(model_name)
+    for candidate in candidates:
+        model_name = candidate["model"]
+        base_url = candidate["base_url"]
+        api_key = candidate["api_key"]
+        request_model = _resolve_model_name(model_name, base_url)
         try:
             response = requests.post(
-                f"{settings.AI_API_BASE_URL.rstrip('/')}/responses",
+                f"{base_url.rstrip('/')}/responses",
                 headers={
-                    "Authorization": f"Bearer {settings.AI_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={

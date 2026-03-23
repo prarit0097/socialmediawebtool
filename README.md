@@ -79,6 +79,8 @@ INSTAGRAM_CONTAINER_MAX_POLLS=24
 AI_API_KEY=PASTE_YOUR_OPENAI_KEY_HERE
 AI_API_BASE_URL=https://api.openai.com/v1
 AI_MODEL=openai/gpt-4.1-nano
+AI_FALLBACK_API_KEY=
+AI_FALLBACK_API_BASE_URL=
 AI_FALLBACK_MODEL=openai/gpt-4.1-mini
 AI_TIMEOUT_SECONDS=90
 ```
@@ -97,6 +99,17 @@ These controls are available on each target detail page under `AI Settings` and 
 Default AI model order in this repo:
 - primary: `openai/gpt-4.1-nano`
 - fallback: `openai/gpt-4.1-mini`
+
+For `Ollama primary + OpenAI fallback`, use this pattern:
+
+```env
+AI_API_KEY=ollama
+AI_API_BASE_URL=http://YOUR_VPS_IP:11434/v1
+AI_MODEL=llama3.2
+AI_FALLBACK_API_KEY=PASTE_YOUR_OPENAI_KEY_HERE
+AI_FALLBACK_API_BASE_URL=https://api.openai.com/v1
+AI_FALLBACK_MODEL=openai/gpt-4.1-mini
+```
 
 ## Google Drive Requirements
 - share the Drive folder with `GOOGLE_SERVICE_ACCOUNT_EMAIL`
