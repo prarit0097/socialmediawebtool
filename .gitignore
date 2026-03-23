@@ -5,6 +5,7 @@ db.sqlite3
 .env
 media_cache/
 staticfiles/
+.django_cache/
 *.log
 .run_scheduler.lock
 tools/ngrok/ngrok-v3-stable-windows-amd64.zip

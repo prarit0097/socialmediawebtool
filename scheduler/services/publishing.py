@@ -290,8 +290,7 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
 
             creation = _graph_post(f"/{target.instagram_account.external_id}/media", token, payload)
             container_id = creation.get("id", "")
-            if mime_type.startswith("video/"):
-                _wait_for_instagram_container(container_id, token)
+            _wait_for_instagram_container(container_id, token)
             publish = _graph_post(
                 f"/{target.instagram_account.external_id}/media_publish",
                 token,

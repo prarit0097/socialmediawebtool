@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+from django.conf import settings
+from django.core.cache import cache
+
 from scheduler.models import PostLog, PublishingTarget
 from scheduler.services.drive import DriveConfigError, find_caption_file, is_publishable_media, list_folder_files
 from scheduler.services.proxy import is_public_base_ready
 
 
+def _cache_key(target: PublishingTarget) -> str:
+    return f"target-health:{target.pk}:{int(target.updated_at.timestamp())}"
+
+
 def build_target_health(target: PublishingTarget) -> dict:
+    cache_key = _cache_key(target)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     issues = []
     file_count = 0
     media_count = 0
@@ -40,7 +52,7 @@ def build_target_health(target: PublishingTarget) -> dict:
     if any(log["status"] == PostLog.STATUS_FAILED for log in latest_logs):
         overall = "warning"
 
-    return {
+    health = {
         "overall": overall,
         "issues": issues,
         "file_count": file_count,
@@ -49,3 +61,5 @@ def build_target_health(target: PublishingTarget) -> dict:
         "cached_asset_count": getattr(target, "ready_media_asset_count", target.media_assets.filter(status="ready").count()),
         "latest_logs": latest_logs,
     }
+    cache.set(cache_key, health, settings.HEALTH_CACHE_TTL_SECONDS)
+    return health

@@ -1,5 +1,8 @@
 from datetime import datetime, time
+from io import BytesIO
 
+from PIL import Image
+from django.core.cache import cache
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.urls import reverse
@@ -10,7 +13,8 @@ from .services.diagnostics import build_rejection_diagnostics
 from .services.ai import _build_model_candidates, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
-from .services.publishing import _platform_already_succeeded_for_file, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
+from .services.media_transform import build_instagram_ready_image
+from .services.publishing import _platform_already_succeeded_for_file, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 from .services.telegram import build_daily_report_message
 
@@ -637,6 +641,9 @@ class SharedQueueTest(TestCase):
 
 
 class HealthTest(TestCase):
+    def setUp(self):
+        cache.clear()
+
     def test_health_includes_cached_asset_count(self):
         credential = MetaCredential.objects.create(label="Test", access_token="token")
         target = PublishingTarget.objects.create(credential=credential, sync_key="fb:1", display_name="T")
@@ -649,6 +656,64 @@ class HealthTest(TestCase):
         )
         health = build_target_health(target)
         self.assertEqual(health["cached_asset_count"], 1)
+
+    def test_health_reuses_cached_drive_summary(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(credential=credential, sync_key="fb:cache", display_name="Cached", drive_folder_id="folder")
+        files = [{"id": "1", "name": "POST1.jpeg", "mimeType": "image/jpeg"}]
+
+        with patch("scheduler.services.health.list_folder_files", return_value=files) as list_mock:
+            first = build_target_health(target)
+            second = build_target_health(target)
+
+        self.assertEqual(first["file_count"], 1)
+        self.assertEqual(second["file_count"], 1)
+        list_mock.assert_called_once_with("folder")
+
+
+class MediaTransformTest(TestCase):
+    def test_instagram_ready_image_returns_small_jpeg(self):
+        image = Image.new("RGBA", (2200, 2200), color=(255, 0, 0, 128))
+        source = BytesIO()
+        image.save(source, format="PNG")
+
+        output = build_instagram_ready_image(source.getvalue())
+
+        self.assertLessEqual(len(output), 4 * 1024 * 1024)
+        converted = Image.open(BytesIO(output))
+        self.assertEqual(converted.format, "JPEG")
+        self.assertLessEqual(max(converted.size), 1440)
+
+
+class InstagramPublishTest(TestCase):
+    def test_instagram_image_waits_for_container_before_publish(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:wait",
+            display_name="IG Wait",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file1", "name": "POST15.jpeg", "mimeType": "image/jpeg"}
+
+        with patch("scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST15.jpg"]), patch(
+            "scheduler.services.publishing._graph_post",
+            side_effect=[{"id": "container-1"}, {"id": "publish-1"}],
+        ) as graph_post_mock, patch("scheduler.services.publishing._wait_for_instagram_container") as wait_mock:
+            result = _publish_to_instagram(target, file_obj)
+
+        self.assertEqual(result, "publish-1")
+        wait_mock.assert_called_once_with("container-1", "page-token")
+        self.assertEqual(graph_post_mock.call_count, 2)
 
 
 class PostingTimesFormTest(TestCase):

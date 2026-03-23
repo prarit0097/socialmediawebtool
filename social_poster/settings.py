@@ -103,6 +103,12 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_CACHE_DIR = BASE_DIR / "media_cache"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": str(BASE_DIR / ".django_cache"),
+    }
+}
 
 META_GRAPH_BASE_URL = os.getenv("META_GRAPH_BASE_URL", "https://graph.facebook.com/v22.0")
 META_GRAPH_TIMEOUT_SECONDS = int(os.getenv("META_GRAPH_TIMEOUT_SECONDS", "180"))
@@ -123,3 +129,4 @@ AI_FALLBACK_MODEL = os.getenv("AI_FALLBACK_MODEL", "openai/gpt-4.1-mini")
 AI_TIMEOUT_SECONDS = int(os.getenv("AI_TIMEOUT_SECONDS", "90"))
 INSTAGRAM_CONTAINER_POLL_SECONDS = int(os.getenv("INSTAGRAM_CONTAINER_POLL_SECONDS", "5"))
 INSTAGRAM_CONTAINER_MAX_POLLS = int(os.getenv("INSTAGRAM_CONTAINER_MAX_POLLS", "24"))
+HEALTH_CACHE_TTL_SECONDS = int(os.getenv("HEALTH_CACHE_TTL_SECONDS", "120"))
