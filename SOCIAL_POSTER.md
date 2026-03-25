@@ -206,3 +206,5 @@ python manage.py run_scheduler
 - Target/dashboard health checks ko short-lived cache diya gaya hai. Ab har page refresh par Google Drive folder ko repeatedly scan nahi kiya jayega, jis se live UI noticeably faster feel honi chahiye.
 - Instagram image pipeline ko aur strict banaya gaya hai: EXIF orientation normalize hoti hai, oversized images downscale hoti hain, output baseline JPEG me convert hota hai, metadata strip hoti hai, aur file ko smaller target size ke andar compress kiya jata hai.
 - Instagram image posting race condition fix ki gayi hai. Ab image containers ko bhi video ki tarah publish se pehle `ready/finished` state tak wait kiya jata hai, taaki `Media ID is not available` jaisi early-publish failures kam ho.
+2026-03-25
+- Telegram daily report format ko user-requested layout ke hisaab se update kiya gaya: `SUCCESSFUL ACTIVITY ---` section me ab active target blocks numbered form me aate hain aur har target ke neeche separate `fb posting` aur `insta posting` status lines `done/not done` ke saath date-time dikhati hain.

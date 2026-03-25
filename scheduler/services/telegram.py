@@ -49,6 +49,17 @@ def _short_reason(message: str, limit: int = 120) -> str:
     return text[:limit].rstrip()
 
 
+def _format_status_line(log, success_field: str, fallback_field: str) -> str:
+    if log:
+        timestamp = log.get(success_field) or log.get(fallback_field)
+        when = timezone.localtime(timestamp).strftime("%d %b %Y, %I:%M %p") if timestamp else "-"
+        if log["status"] == PostLog.STATUS_SUCCESS:
+            return f"done at {when}"
+        reason = _short_reason(log.get("message", ""))
+        return f"not done at {when}" + (f" | Reason: {reason}" if reason else "")
+    return "not done"
+
+
 def build_daily_report_message(report_date):
     now = timezone.localtime()
     active_targets = list(PublishingTarget.objects.filter(is_active=True).order_by("display_name"))
@@ -56,8 +67,7 @@ def build_daily_report_message(report_date):
     targets_with_activity = 0
     total_success = 0
     total_failed = 0
-    successful_targets = []
-    attention_targets = []
+    activity_targets = []
 
     for target in active_targets:
         success_logs, failed_logs = _target_day_stats(target, report_date)
@@ -68,18 +78,29 @@ def build_daily_report_message(report_date):
         total_success += success_count
         total_failed += failed_count
 
-        if success_count:
-            file_names = ", ".join(dict.fromkeys(log["drive_file_name"] for log in success_logs if log["drive_file_name"])) or "-"
-            fb_success = sum(1 for log in success_logs if log["platform"] == "facebook")
-            ig_success = sum(1 for log in success_logs if log["platform"] == "instagram")
-            successful_targets.append(
-                f"- {target.display_name}: FB {fb_success} | IG {ig_success} | Files: {file_names}"
-            )
+        if success_count or failed_count:
+            platform_logs = []
+            for log in success_logs:
+                item = dict(log)
+                item["status"] = PostLog.STATUS_SUCCESS
+                platform_logs.append(item)
+            for log in failed_logs:
+                item = dict(log)
+                item["status"] = PostLog.STATUS_FAILED
+                platform_logs.append(item)
 
-        if failed_count:
-            first_failure = failed_logs[0]
-            attention_targets.append(
-                f"- {target.display_name}: Failed {failed_count} | Last file: {first_failure.get('drive_file_name') or '-'} | Reason: {_short_reason(first_failure.get('message', ''))}"
+            def _latest_for(platform):
+                matches = [log for log in platform_logs if log["platform"] == platform]
+                if not matches:
+                    return None
+                return max(matches, key=lambda entry: entry.get("published_at") or entry.get("created_at"))
+
+            activity_targets.append(
+                {
+                    "name": target.display_name,
+                    "facebook": _latest_for("facebook"),
+                    "instagram": _latest_for("instagram"),
+                }
             )
 
     quiet_targets = active_targets_count - targets_with_activity
@@ -103,13 +124,13 @@ def build_daily_report_message(report_date):
         f"- Quiet targets: {quiet_targets}",
     ]
 
-    if successful_targets:
-        lines.extend(["", "SUCCESSFUL ACTIVITY"])
-        lines.extend(successful_targets[:10])
-
-    if attention_targets:
-        lines.extend(["", "NEEDS ATTENTION"])
-        lines.extend(attention_targets[:10])
+    if activity_targets:
+        lines.extend(["", "SUCCESSFUL ACTIVITY ---", ""])
+        for index, item in enumerate(activity_targets[:10], start=1):
+            lines.append(f"{index} = {item['name']}")
+            lines.append(f"\t1 - fb posting     = {_format_status_line(item['facebook'], 'published_at', 'created_at')}")
+            lines.append(f"\t2 - insta posting  = {_format_status_line(item['instagram'], 'published_at', 'created_at')}")
+            lines.append("")
 
     if quiet_targets:
         lines.extend(["", f"NOTE: {quiet_targets} active target(s) had no posting activity on this date."])

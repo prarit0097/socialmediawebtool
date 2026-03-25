@@ -478,6 +478,36 @@ class AIServiceTest(TestCase):
         self.assertIn("AI SUMMARY", message)
         self.assertIn("AI says things look good.", message)
 
+    def test_daily_report_message_uses_requested_target_status_layout(self):
+        from django.utils import timezone
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(credential=credential, sync_key="fb:report1", display_name="Page name")
+        target.post_logs.create(
+            platform="facebook",
+            scheduled_for=timezone.now(),
+            published_at=timezone.now(),
+            status="success",
+            drive_file_id="file-fb",
+            drive_file_name="POST1.jpeg",
+        )
+        target.post_logs.create(
+            platform="instagram",
+            scheduled_for=timezone.now(),
+            status="failed",
+            drive_file_id="file-ig",
+            drive_file_name="POST1.jpeg",
+            message="Media ID is not available",
+        )
+
+        message = build_daily_report_message(timezone.localdate())
+
+        self.assertIn("SUCCESSFUL ACTIVITY ---", message)
+        self.assertIn("1 = Page name", message)
+        self.assertIn("1 - fb posting     = done at", message)
+        self.assertIn("2 - insta posting  = not done at", message)
+        self.assertNotIn("NEEDS ATTENTION", message)
+
 
 class AIViewFlowTest(TestCase):
     @override_settings(AI_API_KEY="test-key")
