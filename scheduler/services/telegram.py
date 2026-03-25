@@ -49,25 +49,42 @@ def _short_reason(message: str, limit: int = 120) -> str:
     return text[:limit].rstrip()
 
 
-def _format_status_line(log, success_field: str, fallback_field: str) -> str:
-    if log:
-        timestamp = log.get(success_field) or log.get(fallback_field)
-        when = timezone.localtime(timestamp).strftime("%d %b %Y, %I:%M %p") if timestamp else "-"
-        if log["status"] == PostLog.STATUS_SUCCESS:
-            return f"done at {when}"
-        reason = _short_reason(log.get("message", ""))
-        return f"not done at {when}" + (f" | Reason: {reason}" if reason else "")
-    return "not done"
+def _format_time(timestamp) -> str:
+    return timezone.localtime(timestamp).strftime("%d %b %Y, %I:%M %p") if timestamp else "-"
 
 
-def _format_platform_activity(logs, success_field: str, fallback_field: str) -> list[str]:
+def _format_success_timeline(logs, success_field: str) -> str:
     if not logs:
-        return ["  - No activity"]
+        return "No successful posts"
+    sorted_logs = sorted(logs, key=lambda entry: entry.get(success_field) or timezone.now())
+    times = " | ".join(_format_time(log.get(success_field)) for log in sorted_logs if log.get(success_field))
+    return f"Published at: {times}" if times else "No successful posts"
 
+
+def _format_failure_summary(logs, fallback_field: str) -> list[str]:
+    if not logs:
+        return []
+
+    sorted_logs = sorted(logs, key=lambda entry: entry.get(fallback_field) or timezone.now())
+    latest_log = sorted_logs[-1]
+    lines = [f"  Failed attempts: {len(sorted_logs)}"]
+    lines.append(f"  Last failed at: {_format_time(latest_log.get(fallback_field))}")
+    reason = _short_reason(latest_log.get("message", ""))
+    if reason:
+        lines.append(f"  Last issue: {reason}")
+    return lines
+
+
+def _build_platform_section(label: str, success_logs, failed_logs) -> list[str]:
     lines = []
-    sorted_logs = sorted(logs, key=lambda entry: entry.get(success_field) or entry.get(fallback_field) or timezone.now())
-    for index, log in enumerate(sorted_logs, start=1):
-        lines.append(f"  - Post {index}: {_format_status_line(log, success_field, fallback_field)}")
+    success_count = len(success_logs)
+    failed_count = len(failed_logs)
+    status_bits = [f"{success_count} successful post{'s' if success_count != 1 else ''}"]
+    if failed_count:
+        status_bits.append(f"{failed_count} failed attempt{'s' if failed_count != 1 else ''}")
+    lines.append(f"- {label}: {', '.join(status_bits)}")
+    lines.append(f"  {_format_success_timeline(success_logs, 'published_at')}")
+    lines.extend(_format_failure_summary(failed_logs, "created_at"))
     return lines
 
 
@@ -90,24 +107,13 @@ def build_daily_report_message(report_date):
         total_failed += failed_count
 
         if success_count or failed_count:
-            platform_logs = []
-            for log in success_logs:
-                item = dict(log)
-                item["status"] = PostLog.STATUS_SUCCESS
-                platform_logs.append(item)
-            for log in failed_logs:
-                item = dict(log)
-                item["status"] = PostLog.STATUS_FAILED
-                platform_logs.append(item)
-
-            def _all_for(platform):
-                return [log for log in platform_logs if log["platform"] == platform]
-
             activity_targets.append(
                 {
                     "name": target.display_name,
-                    "facebook_logs": _all_for("facebook"),
-                    "instagram_logs": _all_for("instagram"),
+                    "facebook_success_logs": [dict(log) for log in success_logs if log["platform"] == "facebook"],
+                    "facebook_failed_logs": [dict(log) for log in failed_logs if log["platform"] == "facebook"],
+                    "instagram_success_logs": [dict(log) for log in success_logs if log["platform"] == "instagram"],
+                    "instagram_failed_logs": [dict(log) for log in failed_logs if log["platform"] == "instagram"],
                 }
             )
 
@@ -133,13 +139,12 @@ def build_daily_report_message(report_date):
     ]
 
     if activity_targets:
-        lines.extend(["", "SUCCESSFUL ACTIVITY ---", ""])
+        lines.extend(["", "ACTIVITY DETAILS", ""])
         for index, item in enumerate(activity_targets[:10], start=1):
-            lines.append(f"PAGE {index}: {item['name']}")
-            lines.append("Facebook")
-            lines.extend(_format_platform_activity(item["facebook_logs"], "published_at", "created_at"))
-            lines.append("Instagram")
-            lines.extend(_format_platform_activity(item["instagram_logs"], "published_at", "created_at"))
+            lines.append(f"TARGET {index}")
+            lines.append(item["name"])
+            lines.extend(_build_platform_section("Facebook", item["facebook_success_logs"], item["facebook_failed_logs"]))
+            lines.extend(_build_platform_section("Instagram", item["instagram_success_logs"], item["instagram_failed_logs"]))
             lines.append("")
 
     if quiet_targets:

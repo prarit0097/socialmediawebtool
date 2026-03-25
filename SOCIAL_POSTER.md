@@ -209,3 +209,4 @@ python manage.py run_scheduler
 2026-03-25
 - Telegram daily report format ko user-requested layout ke hisaab se update kiya gaya: `SUCCESSFUL ACTIVITY ---` section me ab active target blocks numbered form me aate hain aur har target ke neeche separate `fb posting` aur `insta posting` status lines `done/not done` ke saath date-time dikhati hain.
 - Telegram daily report ko aur user-friendly banaya gaya: ab har active target `PAGE X: ...` heading ke saath aata hai, aur Facebook/Instagram sections me pure din ki sabhi post attempts `Post 1`, `Post 2` format me exact date-time ke saath list hoti hain.
+- Telegram daily report layout ko aur professional summary style me polish kiya gaya: ab `ACTIVITY DETAILS` section me har target `TARGET X` heading ke saath aata hai, aur Facebook/Instagram ke liye post count, full-day publish timeline, aur failed attempts ka concise summary dikhata hai.

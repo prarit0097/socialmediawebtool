@@ -510,13 +510,14 @@ class AIServiceTest(TestCase):
 
         message = build_daily_report_message(timezone.localdate())
 
-        self.assertIn("SUCCESSFUL ACTIVITY ---", message)
-        self.assertIn("PAGE 1: Page name", message)
-        self.assertIn("Facebook", message)
-        self.assertIn("Instagram", message)
-        self.assertIn("Post 1: done at", message)
-        self.assertIn("Post 2: done at", message)
-        self.assertIn("Post 1: not done at", message)
+        self.assertIn("ACTIVITY DETAILS", message)
+        self.assertIn("TARGET 1", message)
+        self.assertIn("Page name", message)
+        self.assertIn("- Facebook: 2 successful posts", message)
+        self.assertIn("- Instagram: 0 successful posts, 1 failed attempt", message)
+        self.assertIn("Published at:", message)
+        self.assertIn("Last failed at:", message)
+        self.assertIn("Last issue: Media ID is not available", message)
         self.assertNotIn("NEEDS ATTENTION", message)
 
 
