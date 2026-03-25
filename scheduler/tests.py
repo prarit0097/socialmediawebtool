@@ -492,6 +492,14 @@ class AIServiceTest(TestCase):
             drive_file_name="POST1.jpeg",
         )
         target.post_logs.create(
+            platform="facebook",
+            scheduled_for=timezone.now(),
+            published_at=timezone.now(),
+            status="success",
+            drive_file_id="file-fb-2",
+            drive_file_name="POST2.jpeg",
+        )
+        target.post_logs.create(
             platform="instagram",
             scheduled_for=timezone.now(),
             status="failed",
@@ -503,9 +511,12 @@ class AIServiceTest(TestCase):
         message = build_daily_report_message(timezone.localdate())
 
         self.assertIn("SUCCESSFUL ACTIVITY ---", message)
-        self.assertIn("1 = Page name", message)
-        self.assertIn("1 - fb posting     = done at", message)
-        self.assertIn("2 - insta posting  = not done at", message)
+        self.assertIn("PAGE 1: Page name", message)
+        self.assertIn("Facebook", message)
+        self.assertIn("Instagram", message)
+        self.assertIn("Post 1: done at", message)
+        self.assertIn("Post 2: done at", message)
+        self.assertIn("Post 1: not done at", message)
         self.assertNotIn("NEEDS ATTENTION", message)
 
 

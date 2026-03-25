@@ -208,3 +208,4 @@ python manage.py run_scheduler
 - Instagram image posting race condition fix ki gayi hai. Ab image containers ko bhi video ki tarah publish se pehle `ready/finished` state tak wait kiya jata hai, taaki `Media ID is not available` jaisi early-publish failures kam ho.
 2026-03-25
 - Telegram daily report format ko user-requested layout ke hisaab se update kiya gaya: `SUCCESSFUL ACTIVITY ---` section me ab active target blocks numbered form me aate hain aur har target ke neeche separate `fb posting` aur `insta posting` status lines `done/not done` ke saath date-time dikhati hain.
+- Telegram daily report ko aur user-friendly banaya gaya: ab har active target `PAGE X: ...` heading ke saath aata hai, aur Facebook/Instagram sections me pure din ki sabhi post attempts `Post 1`, `Post 2` format me exact date-time ke saath list hoti hain.

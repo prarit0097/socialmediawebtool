@@ -60,6 +60,17 @@ def _format_status_line(log, success_field: str, fallback_field: str) -> str:
     return "not done"
 
 
+def _format_platform_activity(logs, success_field: str, fallback_field: str) -> list[str]:
+    if not logs:
+        return ["  - No activity"]
+
+    lines = []
+    sorted_logs = sorted(logs, key=lambda entry: entry.get(success_field) or entry.get(fallback_field) or timezone.now())
+    for index, log in enumerate(sorted_logs, start=1):
+        lines.append(f"  - Post {index}: {_format_status_line(log, success_field, fallback_field)}")
+    return lines
+
+
 def build_daily_report_message(report_date):
     now = timezone.localtime()
     active_targets = list(PublishingTarget.objects.filter(is_active=True).order_by("display_name"))
@@ -89,17 +100,14 @@ def build_daily_report_message(report_date):
                 item["status"] = PostLog.STATUS_FAILED
                 platform_logs.append(item)
 
-            def _latest_for(platform):
-                matches = [log for log in platform_logs if log["platform"] == platform]
-                if not matches:
-                    return None
-                return max(matches, key=lambda entry: entry.get("published_at") or entry.get("created_at"))
+            def _all_for(platform):
+                return [log for log in platform_logs if log["platform"] == platform]
 
             activity_targets.append(
                 {
                     "name": target.display_name,
-                    "facebook": _latest_for("facebook"),
-                    "instagram": _latest_for("instagram"),
+                    "facebook_logs": _all_for("facebook"),
+                    "instagram_logs": _all_for("instagram"),
                 }
             )
 
@@ -127,9 +135,11 @@ def build_daily_report_message(report_date):
     if activity_targets:
         lines.extend(["", "SUCCESSFUL ACTIVITY ---", ""])
         for index, item in enumerate(activity_targets[:10], start=1):
-            lines.append(f"{index} = {item['name']}")
-            lines.append(f"\t1 - fb posting     = {_format_status_line(item['facebook'], 'published_at', 'created_at')}")
-            lines.append(f"\t2 - insta posting  = {_format_status_line(item['instagram'], 'published_at', 'created_at')}")
+            lines.append(f"PAGE {index}: {item['name']}")
+            lines.append("Facebook")
+            lines.extend(_format_platform_activity(item["facebook_logs"], "published_at", "created_at"))
+            lines.append("Instagram")
+            lines.extend(_format_platform_activity(item["instagram_logs"], "published_at", "created_at"))
             lines.append("")
 
     if quiet_targets:
