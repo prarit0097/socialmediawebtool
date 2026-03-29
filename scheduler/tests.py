@@ -16,7 +16,7 @@ from .services.health import build_target_health
 from .services.media_transform import build_instagram_ready_image
 from .services.publishing import _platform_already_succeeded_for_file, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
-from .services.telegram import build_daily_report_message
+from .services.telegram import TELEGRAM_MESSAGE_MAX_LENGTH, _split_telegram_message, build_daily_report_message
 
 
 class DriveHelpersTest(TestCase):
@@ -626,6 +626,17 @@ class AIViewFlowTest(TestCase):
         self.assertEqual(target.last_error, "")
         thread_mock.assert_called_once()
         self.assertContains(response, "Test post started in background.")
+
+
+class TelegramReportTest(TestCase):
+    def test_long_telegram_message_is_split_into_safe_chunks(self):
+        message = ("TARGET 1\n" + ("Published at: 28 Mar 2026, 09:00 AM\n" * 300)).strip()
+
+        chunks = _split_telegram_message(message)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= TELEGRAM_MESSAGE_MAX_LENGTH for chunk in chunks))
+        self.assertEqual("".join(chunk + "\n" for chunk in chunks).replace("\n\n", "\n").strip(), message)
 
 
 class SharedQueueTest(TestCase):

@@ -219,4 +219,5 @@ python manage.py run_scheduler
   - Max file size limit 4 MB se 8 MB ki gayi (Instagram actual limit 8 MB hai).
   - Aspect ratio enforcement add ki gayi: agar image Instagram ke 4:5 to 1.91:1 range se bahar hai to white padding se fix hogi (pehle IG reject ya poorly crop kar deta tha).
 - **Caption fallback fix:** Pehle agar koi caption nahi milta (na AI, na default, na caption.txt) to filename (e.g. "IMG_20230415.jpg") caption ban jata tha — ye automated post ka signal deta tha algorithm ko aur engagement drastically kam karta tha. Ab empty caption jayega jo much better hai.
+- **Telegram daily report oversized-message fix:** Agar report Telegram `sendMessage` limit ke paas pahunchti hai, to app ab report ko multiple safe chunks me split karke bhejti hai, isliye large activity days par `400 Bad Request` ki wajah se report fail nahi honi chahiye.
 - All 32 existing tests pass with these changes.

@@ -10,6 +10,8 @@ from django.utils import timezone
 from scheduler.models import DailyReportLog, PostLog, PublishingTarget
 from scheduler.services.ai import ai_is_configured, build_ai_report_summary
 
+TELEGRAM_MESSAGE_MAX_LENGTH = 3900
+
 
 def _day_bounds(report_date):
     start = timezone.make_aware(datetime.combine(report_date, datetime.min.time()))
@@ -164,15 +166,41 @@ def build_daily_report_message(report_date):
     return "\n".join(lines)
 
 
+def _split_telegram_message(message: str, limit: int = TELEGRAM_MESSAGE_MAX_LENGTH) -> list[str]:
+    text = (message or "").strip()
+    if not text:
+        return [""]
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n", 0, limit + 1)
+        if split_at <= 0:
+            split_at = remaining.rfind(" ", 0, limit + 1)
+        if split_at <= 0:
+            split_at = limit
+        chunk = remaining[:split_at].rstrip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].lstrip()
+    return chunks or [text[:limit]]
+
+
 def send_telegram_message(message: str) -> None:
     if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
         raise ValueError("Telegram bot token or chat ID is not configured.")
-    response = requests.post(
-        f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={"chat_id": settings.TELEGRAM_CHAT_ID, "text": message},
-        timeout=30,
-    )
-    response.raise_for_status()
+    for chunk in _split_telegram_message(message):
+        response = requests.post(
+            f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": settings.TELEGRAM_CHAT_ID, "text": chunk},
+            timeout=30,
+        )
+        response.raise_for_status()
 
 
 def send_daily_report(force=False, report_date=None):
