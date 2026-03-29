@@ -145,6 +145,53 @@ Run tests:
 .\.venv\Scripts\python.exe manage.py test
 ```
 
+## VPS Deploy
+Current live VPS deployment for this project uses:
+
+```bash
+Project folder: /opt/drive-to-meta-scheduler/app
+Web service: socialposter-web.service
+Scheduler service: socialposter-scheduler.service
+```
+
+Pull latest code on VPS:
+
+```bash
+cd /opt/drive-to-meta-scheduler/app
+git pull origin main
+```
+
+Restart live services:
+
+```bash
+systemctl restart socialposter-web.service
+systemctl restart socialposter-scheduler.service
+```
+
+Verify deployed version and service health:
+
+```bash
+cd /opt/drive-to-meta-scheduler/app
+git rev-parse --short HEAD
+systemctl status socialposter-web.service --no-pager
+systemctl status socialposter-scheduler.service --no-pager
+```
+
+Manual Telegram report test on VPS:
+
+```bash
+cd /opt/drive-to-meta-scheduler/app
+. .venv/bin/activate
+python manage.py send_daily_report --date 2026-03-28 --force
+```
+
+Check recent logs:
+
+```bash
+journalctl -u socialposter-web.service -n 50 --no-pager -l
+journalctl -u socialposter-scheduler.service -n 50 --no-pager -l
+```
+
 ## ngrok Testing
 Configure ngrok auth token:
 

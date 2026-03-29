@@ -153,6 +153,65 @@ python manage.py run_scheduler
 .\.venv\Scripts\python.exe manage.py test
 ```
 
+## VPS Live Deploy Commands
+
+Ye project currently VPS par is folder se live chal raha hai:
+
+```bash
+/opt/drive-to-meta-scheduler/app
+```
+
+Live `systemd` services:
+
+```bash
+socialposter-web.service
+socialposter-scheduler.service
+```
+
+### VPS Par Latest Code Pull Karna
+```bash
+cd /opt/drive-to-meta-scheduler/app
+git pull origin main
+```
+
+### VPS Par Web + Scheduler Restart Karna
+```bash
+systemctl restart socialposter-web.service
+systemctl restart socialposter-scheduler.service
+```
+
+### VPS Par Deploy Verify Karna
+```bash
+cd /opt/drive-to-meta-scheduler/app
+git rev-parse --short HEAD
+systemctl status socialposter-web.service --no-pager
+systemctl status socialposter-scheduler.service --no-pager
+```
+
+### VPS Par Manual Telegram Report Test
+```bash
+cd /opt/drive-to-meta-scheduler/app
+. .venv/bin/activate
+python manage.py send_daily_report --date 2026-03-28 --force
+```
+
+### VPS Par Logs Check Karna
+```bash
+journalctl -u socialposter-web.service -n 50 --no-pager -l
+journalctl -u socialposter-scheduler.service -n 50 --no-pager -l
+```
+
+### VPS Par Full Safe Deploy Sequence
+```bash
+cd /opt/drive-to-meta-scheduler/app
+git pull origin main
+systemctl restart socialposter-web.service
+systemctl restart socialposter-scheduler.service
+git rev-parse --short HEAD
+systemctl status socialposter-web.service --no-pager
+systemctl status socialposter-scheduler.service --no-pager
+```
+
 ## Current Status
 - Web app chal rahi hai
 - Meta sync chal raha hai
@@ -220,4 +279,6 @@ python manage.py run_scheduler
   - Aspect ratio enforcement add ki gayi: agar image Instagram ke 4:5 to 1.91:1 range se bahar hai to white padding se fix hogi (pehle IG reject ya poorly crop kar deta tha).
 - **Caption fallback fix:** Pehle agar koi caption nahi milta (na AI, na default, na caption.txt) to filename (e.g. "IMG_20230415.jpg") caption ban jata tha — ye automated post ka signal deta tha algorithm ko aur engagement drastically kam karta tha. Ab empty caption jayega jo much better hai.
 - **Telegram daily report oversized-message fix:** Agar report Telegram `sendMessage` limit ke paas pahunchti hai, to app ab report ko multiple safe chunks me split karke bhejti hai, isliye large activity days par `400 Bad Request` ki wajah se report fail nahi honi chahiye.
-- All 32 existing tests pass with these changes.
+- All 33 existing tests pass with these changes.
+2026-03-30
+- `SOCIAL_POSTER.md` aur `README.md` me exact VPS deployment commands add ki gayi hain, including live app folder `/opt/drive-to-meta-scheduler/app`, `git pull`, `systemctl restart`, version verification, manual Telegram report test, aur logs check commands.
