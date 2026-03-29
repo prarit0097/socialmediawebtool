@@ -210,3 +210,13 @@ python manage.py run_scheduler
 - Telegram daily report format ko user-requested layout ke hisaab se update kiya gaya: `SUCCESSFUL ACTIVITY ---` section me ab active target blocks numbered form me aate hain aur har target ke neeche separate `fb posting` aur `insta posting` status lines `done/not done` ke saath date-time dikhati hain.
 - Telegram daily report ko aur user-friendly banaya gaya: ab har active target `PAGE X: ...` heading ke saath aata hai, aur Facebook/Instagram sections me pure din ki sabhi post attempts `Post 1`, `Post 2` format me exact date-time ke saath list hoti hain.
 - Telegram daily report layout ko aur professional summary style me polish kiya gaya: ab `ACTIVITY DETAILS` section me har target `TARGET X` heading ke saath aata hai, aur Facebook/Instagram ke liye post count, full-day publish timeline, aur failed attempts ka concise summary dikhata hai.
+2026-03-29
+- **Facebook posting ko direct binary upload (source param) par switch kiya gaya.** Pehle app URL-based upload (`url`/`file_url` param) use karti thi jisme Meta aapki URL se file fetch karta tha — is method se Meta algorithm lower distribution deta hai. Ab file directly binary multipart upload hoti hai (official FB/IG apps ki tarah), jo better algorithmic reach deti hai. URL-based upload ab sirf fallback ke roop me kaam karega.
+- **Instagram image quality significantly improve ki gayi:**
+  - JPEG quality 92 se 95 ki gayi (closer to original quality).
+  - Chroma subsampling `4:2:0` se `4:4:4` ki gayi (full colour detail preserve hoti hai ab).
+  - ICC colour profile ab preserve hota hai (pehle strip ho raha tha, jisse colours shift hote the Instagram par).
+  - Max file size limit 4 MB se 8 MB ki gayi (Instagram actual limit 8 MB hai).
+  - Aspect ratio enforcement add ki gayi: agar image Instagram ke 4:5 to 1.91:1 range se bahar hai to white padding se fix hogi (pehle IG reject ya poorly crop kar deta tha).
+- **Caption fallback fix:** Pehle agar koi caption nahi milta (na AI, na default, na caption.txt) to filename (e.g. "IMG_20230415.jpg") caption ban jata tha — ye automated post ka signal deta tha algorithm ko aur engagement drastically kam karta tha. Ab empty caption jayega jo much better hai.
+- All 32 existing tests pass with these changes.

@@ -197,7 +197,8 @@ def public_media(request, public_key, filename):
     path = Path(asset.local_path)
     if not path.exists():
         return HttpResponse("Cached media file missing.", status=404)
-    response = FileResponse(open(path, "rb"), content_type=asset.content_type or "application/octet-stream")
+    # FileResponse closes the file handle when the response is sent.
+    response = FileResponse(path.open("rb"), content_type=asset.content_type or "application/octet-stream")
     response["Content-Disposition"] = f'inline; filename="{asset.public_filename}"'
     response["Content-Length"] = str(asset.file_size)
     return response

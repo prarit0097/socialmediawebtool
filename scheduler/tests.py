@@ -723,7 +723,7 @@ class MediaTransformTest(TestCase):
 
         output = build_instagram_ready_image(source.getvalue())
 
-        self.assertLessEqual(len(output), 4 * 1024 * 1024)
+        self.assertLessEqual(len(output), 8 * 1024 * 1024)
         converted = Image.open(BytesIO(output))
         self.assertEqual(converted.format, "JPEG")
         self.assertLessEqual(max(converted.size), 1440)

@@ -32,18 +32,24 @@ def build_public_asset_url(asset: MediaAsset) -> str:
 
 
 def ensure_cached_asset(target: PublishingTarget, file_obj: dict, variant: str = "default") -> MediaAsset:
-    metadata = get_drive_file_metadata(file_obj["id"])
-    asset, _ = MediaAsset.objects.get_or_create(
+    asset, created = MediaAsset.objects.get_or_create(
         target=target,
         drive_file_id=file_obj["id"],
         variant=variant,
         defaults={
-            "drive_file_name": metadata.get("name", file_obj.get("name", "media")),
-            "public_filename": metadata.get("name", file_obj.get("name", "media")),
-            "source_mime_type": metadata.get("mimeType", file_obj.get("mimeType", "")),
+            "drive_file_name": file_obj.get("name", "media"),
+            "public_filename": file_obj.get("name", "media"),
+            "source_mime_type": file_obj.get("mimeType", ""),
         },
     )
 
+    # Skip re-download if asset is already cached and the local file exists.
+    if not created and asset.status == MediaAsset.STATUS_READY and asset.local_path:
+        local_path = Path(asset.local_path)
+        if local_path.exists() and asset.file_size and local_path.stat().st_size == asset.file_size:
+            return asset
+
+    metadata = get_drive_file_metadata(file_obj["id"])
     cache_root = _cache_dir()
     raw_bytes = download_drive_file(file_obj["id"])
     source_mime = metadata.get("mimeType", file_obj.get("mimeType", "application/octet-stream"))

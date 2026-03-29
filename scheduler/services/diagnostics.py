@@ -38,7 +38,7 @@ def probable_rejection_reasons(platform: str, file_obj: dict, raw_error: str) ->
             reasons.append("The selected file or endpoint parameters did not match what Facebook expected.")
 
     if name.lower().endswith(".png") and platform == "instagram":
-        reasons.append("If Instagram image posting still fails, convert the image to JPEG and retry.")
+        reasons.append("The source is PNG; it was auto-converted to JPEG for Instagram. If it still fails, check image dimensions and aspect ratio (4:5 to 1.91:1).")
 
     return reasons
 

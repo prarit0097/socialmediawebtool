@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from scheduler.models import PostLog, PublishingTarget, SocialAccount
 from scheduler.services.ai import AIServiceError, build_ai_caption_for_media
-from scheduler.services.cache import get_cached_public_urls
+from scheduler.services.cache import build_public_asset_url, ensure_cached_asset, get_cached_public_urls
 from scheduler.services.diagnostics import build_rejection_diagnostics
 from scheduler.services.drive import (
     DriveConfigError,
@@ -63,6 +63,32 @@ def _graph_post(path: str, access_token: str, payload: dict) -> dict:
         f"{settings.META_GRAPH_BASE_URL}{path}",
         data={**payload, "access_token": access_token},
     )
+    data = _parse_graph_response(response)
+    if response.status_code >= 400 or data.get("error"):
+        message = data.get("error", {}).get("message", response.text)
+        raise PublishingError(message)
+    return data
+
+
+def _graph_post_multipart(path: str, access_token: str, payload: dict,
+                          file_field: str, file_data: tuple) -> dict:
+    """Post to Meta Graph API with multipart file upload (binary source).
+
+    Uses a longer timeout than URL-based calls because the full file body is
+    being uploaded in the request.  Retries are skipped for binary uploads —
+    re-sending a large file on transient errors wastes time and the first
+    attempt already waited long enough.
+    """
+    upload_timeout = max(settings.META_GRAPH_TIMEOUT_SECONDS, 300)
+    try:
+        response = requests.post(
+            f"{settings.META_GRAPH_BASE_URL}{path}",
+            data={**payload, "access_token": access_token},
+            files={file_field: file_data},
+            timeout=upload_timeout,
+        )
+    except (requests.Timeout, requests.ConnectionError) as exc:
+        raise PublishingError(f"Binary upload failed: {exc}")
     data = _parse_graph_response(response)
     if response.status_code >= 400 or data.get("error"):
         message = data.get("error", {}).get("message", response.text)
@@ -221,14 +247,60 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     token = target.facebook_account.access_token or target.credential.access_token
     if not token:
         raise PublishingError("Facebook page access token not available.")
-    caption = build_caption(target, file_obj=file_obj) or file_obj["name"]
-    media_urls = get_cached_public_urls(target, file_obj, variant="default")
+    caption = build_caption(target, file_obj=file_obj)
+    mime_type = file_obj.get("mimeType", "")
+
+    # Pre-cache the asset once (avoids duplicate Drive downloads in fallback path)
+    asset = None
+    try:
+        asset = ensure_cached_asset(target, file_obj, variant="default")
+    except Exception:
+        pass
+
+    errors: list[str] = []
+
+    # Strategy 1: Direct binary upload — matches how official apps publish
+    # and typically receives better algorithmic distribution from Meta.
+    if asset and asset.local_path and Path(asset.local_path).exists():
+        try:
+            file_bytes = Path(asset.local_path).read_bytes()
+            filename = asset.public_filename or file_obj.get("name", "media")
+            content_type = asset.content_type or mime_type or "application/octet-stream"
+            if mime_type.startswith("video/"):
+                result = _graph_post_multipart(
+                    f"/{target.facebook_account.external_id}/videos",
+                    token,
+                    {
+                        "title": _build_media_title(file_obj),
+                        "description": caption,
+                        "published": "true",
+                    },
+                    "source",
+                    (filename, file_bytes, content_type),
+                )
+            else:
+                result = _graph_post_multipart(
+                    f"/{target.facebook_account.external_id}/photos",
+                    token,
+                    {
+                        "caption": caption,
+                        "published": "true",
+                    },
+                    "source",
+                    (filename, file_bytes, content_type),
+                )
+            return result.get("post_id") or result.get("id", "")
+        except PublishingError as exc:
+            errors.append(f"binary upload -> {exc}")
+
+    # Strategy 2: URL-based upload (fallback)
+    media_urls = []
+    if asset and is_public_base_ready():
+        media_urls = [build_public_asset_url(asset)]
     if not media_urls:
         media_urls = build_proxy_urls(target.id, file_obj["id"], file_obj.get("name", "media")) if is_public_base_ready() else []
     if not media_urls:
         media_urls = get_public_media_urls(file_obj)
-    mime_type = file_obj.get("mimeType", "")
-    errors = []
     for media_url in media_urls:
         try:
             if mime_type.startswith("video/"):
@@ -255,7 +327,7 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
             return result.get("post_id") or result.get("id", "")
         except PublishingError as exc:
             errors.append(f"{media_url} -> {exc}")
-    raise PublishingError("Facebook publish failed for all tested media URLs: " + " | ".join(errors))
+    raise PublishingError("Facebook publish failed: " + " | ".join(errors))
 
 
 def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
@@ -265,7 +337,7 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
     token = target.instagram_account.access_token or page_token or target.credential.access_token
     if not token:
         raise PublishingError("Instagram publishing token not available.")
-    caption = build_caption(target, file_obj=file_obj) or file_obj["name"]
+    caption = build_caption(target, file_obj=file_obj)
     errors = []
     mime_type = file_obj.get("mimeType", "")
     variant = "instagram_image" if mime_type.startswith("image/") else ""

@@ -42,7 +42,7 @@ def build_target_health(target: PublishingTarget) -> dict:
         issues.append("No Facebook or Instagram account linked.")
 
     if target.instagram_account and not caption_found and not target.default_caption.strip():
-        issues.append("Instagram will use filename as caption because caption.txt/default caption is missing.")
+        issues.append("No caption configured (caption.txt or default caption missing). Posts will be published without a caption, which hurts engagement.")
 
     if (target.facebook_account or target.instagram_account) and not is_public_base_ready():
         issues.append("PUBLIC_APP_BASE_URL is missing or local-only. Meta cannot fetch proxy media from localhost.")
