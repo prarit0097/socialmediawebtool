@@ -65,6 +65,13 @@ DJANGO_SECRET_KEY=change-me
 DJANGO_DEBUG=true
 DJANGO_ALLOWED_HOSTS=*
 DJANGO_CSRF_TRUSTED_ORIGINS=
+DJANGO_SECURE_HSTS_SECONDS=0
+DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS=false
+DJANGO_SECURE_HSTS_PRELOAD=false
+DJANGO_SECURE_SSL_REDIRECT=false
+DJANGO_SESSION_COOKIE_SECURE=false
+DJANGO_CSRF_COOKIE_SECURE=false
+DJANGO_USE_X_FORWARDED_PROTO=false
 APP_TIME_ZONE=Asia/Kolkata
 META_GRAPH_BASE_URL=https://graph.facebook.com/v22.0
 META_GRAPH_TIMEOUT_SECONDS=180
@@ -73,6 +80,10 @@ META_GRAPH_RETRY_SLEEP_SECONDS=5
 GOOGLE_SERVICE_ACCOUNT_FILE=E:\path\to\service-account.json
 GOOGLE_SERVICE_ACCOUNT_EMAIL=service-account@project.iam.gserviceaccount.com
 PUBLIC_APP_BASE_URL=https://your-public-domain.example.com
+APP_ADMIN_USERNAME=
+APP_ADMIN_PASSWORD=
+APP_ADMIN_REALM=Social Poster Admin
+ALLOW_LEGACY_PUBLIC_MEDIA_FALLBACK=false
 TELEGRAM_BOT_TOKEN=123456:abc
 TELEGRAM_CHAT_ID=123456789
 REPORT_HOUR=9
@@ -85,6 +96,8 @@ AI_API_BASE_URL=https://api.openai.com/v1
 AI_MODEL=openai/gpt-4.1-nano
 AI_FALLBACK_MODEL=openai/gpt-4.1-mini
 AI_TIMEOUT_SECONDS=90
+AI_DEFAULT_NICHE=general
+AI_TARGET_NICHE_MAP_JSON={}
 ```
 
 For live HTTPS domains, the app automatically trusts `PUBLIC_APP_BASE_URL` for CSRF. If you need more trusted origins, set `DJANGO_CSRF_TRUSTED_ORIGINS` as a comma-separated list.
@@ -145,6 +158,18 @@ Run tests:
 .\.venv\Scripts\python.exe manage.py test
 ```
 
+Run publish readiness audit:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py audit_publish_readiness
+```
+
+Export metrics:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py export_post_metrics --days 7 --output .\metrics.csv
+```
+
 ## VPS Deploy
 Current live VPS deployment for this project uses:
 
@@ -191,6 +216,85 @@ Check recent logs:
 journalctl -u socialposter-web.service -n 50 --no-pager -l
 journalctl -u socialposter-scheduler.service -n 50 --no-pager -l
 ```
+
+## Hostinger VPS Notes
+Current production instance is running on a Hostinger VPS with nginx in front of gunicorn/systemd.
+
+Use the venv Python path on VPS instead of plain `python`:
+
+```bash
+cd /opt/drive-to-meta-scheduler/app
+./.venv/bin/python manage.py check
+./.venv/bin/python manage.py audit_publish_readiness
+```
+
+If you update `.env`, restart services after the change:
+
+```bash
+systemctl restart socialposter-web.service
+systemctl restart socialposter-scheduler.service
+```
+
+### Hostinger nginx proxy fix for HTTPS redirect loops
+If `DJANGO_SECURE_SSL_REDIRECT=true` and the site starts redirecting too many times, ensure the active nginx site forwards `X-Forwarded-Proto`.
+
+Active file used on the current Hostinger server:
+
+```bash
+/etc/nginx/sites-enabled/socialposter
+```
+
+Required nginx location block pattern:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8010;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_read_timeout 300s;
+    send_timeout 300s;
+}
+```
+
+Then verify and reload nginx:
+
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+## Metrics and Comparison Workflow
+Tool-vs-manual comparison does not write to the app DB. Use CSV exports.
+
+Tool-only export for one target:
+
+```bash
+cd /opt/drive-to-meta-scheduler/app
+./.venv/bin/python manage.py export_post_metrics --target-id 60 --days 7 --output /tmp/target60_tool.csv
+```
+
+Combined manual + tool export:
+
+```bash
+cat > /tmp/manual.csv <<'EOF'
+platform,post_id,target_id,label,published_at
+facebook,REAL_FB_POST_ID,60,manual,2026-03-19T12:00:00+05:30
+instagram,REAL_IG_MEDIA_ID,60,manual,2026-03-19T12:05:00+05:30
+EOF
+
+./.venv/bin/python manage.py export_post_metrics --target-id 60 --days 30 --manual-csv /tmp/manual.csv --output /tmp/compare.csv
+```
+
+## Current Investigation Notes
+- Facebook metrics exporter now resolves page-post ids separately from reel/video ids, which fixed the earlier `reactions` field error.
+- Facebook reel publish path no longer sends raw filename-derived `title` metadata.
+- Instagram AI/caption heuristics now clean automation-style filename noise before building AI guidance.
+- Current real-world comparison work on `NirogiDhara` shows a large Facebook manual-vs-tool gap and a smaller but still real Instagram gap.
 
 ## ngrok Testing
 Configure ngrok auth token:

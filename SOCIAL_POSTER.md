@@ -166,6 +166,12 @@ python manage.py run_scheduler
 .\.venv\Scripts\python.exe manage.py export_post_metrics --days 7 --output .\metrics.csv
 ```
 
+### Compare Manual vs Tool Metrics
+```bash
+cd /opt/drive-to-meta-scheduler/app
+./.venv/bin/python manage.py export_post_metrics --target-id 60 --days 30 --manual-csv /tmp/manual.csv --output /tmp/compare.csv
+```
+
 ## VPS Live Deploy Commands
 
 Ye project currently VPS par is folder se live chal raha hai:
@@ -214,6 +220,26 @@ journalctl -u socialposter-web.service -n 50 --no-pager -l
 journalctl -u socialposter-scheduler.service -n 50 --no-pager -l
 ```
 
+### Hostinger VPS Par Django Checks Chalana
+```bash
+cd /opt/drive-to-meta-scheduler/app
+./.venv/bin/python manage.py check
+./.venv/bin/python manage.py audit_publish_readiness
+```
+
+### Hostinger VPS Par Metrics Export
+```bash
+cd /opt/drive-to-meta-scheduler/app
+./.venv/bin/python manage.py export_post_metrics --target-id 60 --days 7 --output /tmp/target60_tool.csv
+```
+
+### Hostinger VPS Par nginx Proxy Verify Karna
+```bash
+nginx -t
+systemctl reload nginx
+journalctl -u socialposter-web.service -n 50 --no-pager -l
+```
+
 ### VPS Par Full Safe Deploy Sequence
 ```bash
 cd /opt/drive-to-meta-scheduler/app
@@ -234,6 +260,9 @@ systemctl status socialposter-scheduler.service --no-pager
 - Instagram flow improved hai but still Meta-side acceptance par depend karta hai
 - Telegram reporting chal rahi hai
 - GitHub push workflow set hai
+- Hostinger VPS deployment latest repo commits tak sync ki ja chuki hai
+- Hostinger nginx `X-Forwarded-Proto` forwarding fix ho chuki hai, isliye secure redirect loop issue resolve ho gaya
+- Metrics export aur manual-vs-tool compare workflow live VPS par verify ho chuka hai
 
 ## Last Update
 2026-03-21
@@ -309,3 +338,12 @@ systemctl status socialposter-scheduler.service --no-pager
 - Facebook metrics exporter ko reel/video IDs ke liye harden kiya gaya. Ab page-post ID aur video/reel ID ko alag handle karke exporter `reactions` field error se bachti hai aur reel-style Facebook publishes ke liye metrics resolve karne ki better koshish karti hai.
 - Facebook video publish payload se raw filename-derived `title` hata diya gaya. Ab tool publish ke dauran noisy file-name metadata Facebook reel object par leak nahi hota; focus sirf human caption/description par rehta hai.
 - Instagram-oriented AI hygiene tighten ki gayi: noisy automation-style filenames (`viral`, `official`, serial numbers, template-like names) ko AI context se clean kiya jata hai, taaki captions aur insight generation raw spammy file names ko copy na karein.
+2026-04-11
+- Hostinger VPS deployment flow ko live server reality ke hisaab se verify kiya gaya: app folder `/opt/drive-to-meta-scheduler/app`, nginx site file `/etc/nginx/sites-enabled/socialposter`, aur systemd services `socialposter-web.service` / `socialposter-scheduler.service` confirm hue.
+- Hostinger nginx me `proxy_set_header X-Forwarded-Proto $scheme;` forwarding ensure karke secure redirect loop issue resolve kiya gaya.
+- `python` ke bajay VPS par `./.venv/bin/python` use karne wala documented command flow confirm hua.
+- Real metrics export aur comparison workflow live par validate hua.
+- `NirogiDhara` target ke liye:
+  - Facebook manual-vs-tool gap significantly larger mila.
+  - Instagram manual-vs-tool gap smaller but real mila.
+  - Facebook reel metadata aur Instagram automation-style filename context reduce karne wale changes push kiye gaye.
