@@ -17,7 +17,7 @@ from .services.ai import _build_model_candidates, _normalize_ai_payload, _payloa
 from .services.compliance import evaluate_publish_readiness
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
-from .services.metrics import iter_tool_post_metrics
+from .services.metrics import fetch_facebook_metrics, iter_tool_post_metrics
 from .services.media_transform import build_instagram_ready_image
 from .services.publishing import _platform_already_succeeded_for_file, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
@@ -862,6 +862,61 @@ class PostingTimesFormTest(TestCase):
 
 
 class MetricsExportTest(TestCase):
+    def test_fetch_facebook_metrics_resolves_reel_video_id_via_page_posts(self):
+        from unittest.mock import patch
+
+        def fake_graph_get(path, access_token, params=None):
+            if path == "/page-1/posts":
+                return {
+                    "data": [
+                        {
+                            "id": "page-1_post-1",
+                            "permalink_url": "https://www.facebook.com/reel/1492376226009478/",
+                        }
+                    ]
+                }
+            if path == "/page-1_post-1":
+                return {
+                    "id": "page-1_post-1",
+                    "permalink_url": "https://www.facebook.com/reel/1492376226009478/",
+                    "created_time": "2026-04-10T04:34:56+0000",
+                    "comments": {"summary": {"total_count": 3}},
+                    "reactions": {"summary": {"total_count": 7}},
+                    "shares": {"count": 2},
+                }
+            if path == "/1492376226009478":
+                return {
+                    "id": "1492376226009478",
+                    "permalink_url": "https://www.facebook.com/reel/1492376226009478/",
+                    "created_time": "2026-04-10T04:34:56+0000",
+                    "likes": {"summary": {"total_count": 7}},
+                    "comments": {"summary": {"total_count": 3}},
+                }
+            if path == "/page-1_post-1/insights":
+                metric = params["metric"]
+                values = {
+                    "post_impressions": 100,
+                    "post_impressions_unique": 80,
+                    "post_engaged_users": 12,
+                }
+                return {"data": [{"values": [{"value": values[metric]}]}]}
+            if path == "/1492376226009478/insights":
+                return {"data": [{"values": [{"value": 45}]}]}
+            raise AssertionError(f"Unexpected path: {path}")
+
+        with patch("scheduler.services.metrics._graph_get", side_effect=fake_graph_get):
+            metrics = fetch_facebook_metrics("1492376226009478", "token", "page-1")
+
+        self.assertEqual(metrics["id"], "page-1_post-1")
+        self.assertEqual(metrics["permalink_url"], "https://www.facebook.com/reel/1492376226009478/")
+        self.assertEqual(metrics["reaction_count"], "7")
+        self.assertEqual(metrics["comment_count"], "3")
+        self.assertEqual(metrics["share_count"], "2")
+        self.assertEqual(metrics["impressions"], "100")
+        self.assertEqual(metrics["reach"], "80")
+        self.assertEqual(metrics["engaged_users"], "12")
+        self.assertEqual(metrics["views"], "45")
+
     def test_iter_tool_post_metrics_returns_exportable_row(self):
         from unittest.mock import patch
         from django.utils import timezone
