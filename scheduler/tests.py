@@ -13,7 +13,7 @@ from django.urls import reverse
 from .forms import PublishingTargetForm
 from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
-from .services.ai import _build_model_candidates, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
+from .services.ai import _build_model_candidates, _clean_media_name_context, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.compliance import evaluate_publish_readiness
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
@@ -165,6 +165,10 @@ class DiagnosticsTest(TestCase):
 
 
 class AIServiceTest(TestCase):
+    def test_clean_media_name_context_removes_automation_style_noise(self):
+        cleaned = _clean_media_name_context("500+ Viral Health Awareness Reels by Digital Ceo Official57.mp4")
+        self.assertEqual(cleaned, "Health Awareness by")
+
     @override_settings(AI_API_BASE_URL="https://api.openai.com/v1")
     def test_openai_model_name_prefix_is_removed_for_openai_base_url(self):
         self.assertEqual(_resolve_model_name("openai/gpt-4.1-nano", "https://api.openai.com/v1"), "gpt-4.1-nano")
@@ -233,6 +237,24 @@ class AIServiceTest(TestCase):
         self.assertIn("primary_caption looks like raw filename", errors)
         self.assertIn("not enough hashtags", errors)
         self.assertIn("too many rewrite/translation fields missing", errors)
+
+    def test_payload_quality_errors_flags_cleaned_filename_mirroring(self):
+        errors = _payload_quality_errors(
+            {
+                "primary_caption": "Health Awareness by",
+                "hashtags": ["#one", "#two"],
+                "short_caption": "Short",
+                "long_caption": "Long enough",
+                "hindi_caption": "Hindi",
+                "english_caption": "English",
+                "hinglish_caption": "Hinglish",
+                "translated_hindi": "Hindi translation",
+                "translated_english": "English translation",
+                "translated_hinglish": "Hinglish translation",
+            },
+            {"name": "500+ Viral Health Awareness Reels by Digital Ceo Official57.mp4"},
+        )
+        self.assertIn("primary_caption mirrors cleaned filename context too closely", errors)
 
     @override_settings(
         AI_API_KEY="test-openai-key",

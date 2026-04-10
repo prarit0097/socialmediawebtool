@@ -17,6 +17,16 @@ class AIServiceError(Exception):
     pass
 
 
+NOISY_MEDIA_PATTERNS = [
+    re.compile(r"\bviral\b", re.IGNORECASE),
+    re.compile(r"\breels?\b", re.IGNORECASE),
+    re.compile(r"\bofficial\d*\b", re.IGNORECASE),
+    re.compile(r"\bdigital\s*ceo\b", re.IGNORECASE),
+    re.compile(r"\bcreate[_\s-]*an[_\s-]*\d+[_\s-]*\d+\b", re.IGNORECASE),
+    re.compile(r"\bpost\d+\b", re.IGNORECASE),
+]
+
+
 def ai_is_configured() -> bool:
     return bool(settings.AI_API_KEY.strip())
 
@@ -54,6 +64,17 @@ def _build_model_candidates() -> list[dict]:
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def _clean_media_name_context(file_name: str) -> str:
+    stem = Path(file_name or "").stem
+    text = stem.replace("_", " ").replace("-", " ")
+    for pattern in NOISY_MEDIA_PATTERNS:
+        text = pattern.sub(" ", text)
+    text = re.sub(r"[^A-Za-z0-9\s]+", " ", text)
+    text = re.sub(r"\b\d+\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def _target_niche(target: PublishingTarget) -> str:
@@ -144,11 +165,14 @@ def _normalize_ai_payload(payload: dict, target: PublishingTarget, file_obj: dic
 def _payload_quality_errors(payload: dict, file_obj: dict) -> list[str]:
     issues = []
     file_stem = Path(file_obj.get("name", "")).stem.strip().lower()
+    cleaned_context = _clean_media_name_context(file_obj.get("name", "")).lower()
     primary_caption = _coerce_text(payload.get("primary_caption"))
     if not primary_caption:
         issues.append("primary_caption missing")
     elif file_stem and primary_caption.strip().lower() == file_stem:
         issues.append("primary_caption looks like raw filename")
+    elif cleaned_context and _normalize_text(primary_caption) == _normalize_text(cleaned_context):
+        issues.append("primary_caption mirrors cleaned filename context too closely")
 
     hashtags = _coerce_list(payload.get("hashtags"), prefix="#")
     if len(hashtags) < 2:
@@ -186,7 +210,7 @@ def _best_posting_time_stats(target: PublishingTarget) -> tuple[list[str], str]:
 
 
 def _duplicate_signal(target: PublishingTarget, file_obj: dict) -> tuple[str, str]:
-    current_name = Path(file_obj.get("name", "")).stem
+    current_name = _clean_media_name_context(file_obj.get("name", ""))
     current_tokens = set(_normalize_text(current_name).split())
     if not current_tokens:
         return "low", "No strong duplicate signal from filename."
@@ -198,7 +222,7 @@ def _duplicate_signal(target: PublishingTarget, file_obj: dict) -> tuple[str, st
         .values_list("drive_file_name", flat=True)[:25]
     )
     for name in recent_names:
-        name_tokens = set(_normalize_text(Path(name).stem).split())
+        name_tokens = set(_normalize_text(_clean_media_name_context(name)).split())
         if current_tokens and current_tokens == name_tokens:
             return "high", f"Filename pattern matches a previously published media item: {name}"
         if current_tokens and len(current_tokens & name_tokens) >= max(2, len(current_tokens) // 2):
@@ -210,10 +234,13 @@ def _quality_signal(target: PublishingTarget, file_obj: dict) -> tuple[str, list
     issues = []
     name = file_obj.get("name", "")
     mime_type = file_obj.get("mimeType", "")
-    if len(_normalize_text(Path(name).stem)) < 6:
+    cleaned_context = _clean_media_name_context(name)
+    if len(_normalize_text(cleaned_context)) < 6:
         issues.append("File name is too generic; AI context may be weak.")
-    if mime_type.startswith("video/") and "viral" in name.lower():
-        issues.append("Video looks highly templated; consider checking originality.")
+    if cleaned_context != Path(name).stem.strip():
+        issues.append("Filename looks automation-generated; ignore it as content inspiration.")
+    if mime_type.startswith("video/") and ("viral" in name.lower() or "official" in name.lower()):
+        issues.append("Video name looks highly templated; consider checking originality.")
     if not target.default_caption.strip():
         issues.append("Default caption is empty; AI should generate one before posting.")
     if not issues:
@@ -315,14 +342,15 @@ def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:
     quality_risk, quality_issues, safe_to_post = _quality_signal(target, file_obj)
 
     file_name = file_obj.get("name", "")
-    file_stem = Path(file_name).stem
+    cleaned_context = _clean_media_name_context(file_name)
     system_prompt = (
         "You generate social media strategy JSON for a Django posting app. "
         "Return strict JSON with keys: primary_caption, hashtags, short_caption, long_caption, "
         "hindi_caption, english_caption, hinglish_caption, primary_category, secondary_tags, "
         "duplicate_risk, duplicate_reason, quality_risk, quality_issues, safe_to_post, "
         "translated_hindi, translated_english, translated_hinglish, best_posting_times, "
-        "best_posting_reason, report_summary. Keep captions concise and platform-safe."
+        "best_posting_reason, report_summary. Keep captions concise and platform-safe. "
+        "Do not echo raw filenames, serial numbers, 'viral', 'official', or automation wording unless present in the provided human caption."
     )
     user_prompt = (
         f"Profile: {target.display_name}\n"
@@ -332,7 +360,7 @@ def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:
         f"Existing default caption: {target.default_caption[:1500]}\n"
         f"File name: {file_name}\n"
         f"File type: {file_obj.get('mimeType', '')}\n"
-        f"Derived title context: {file_stem}\n"
+        f"Cleaned media context: {cleaned_context or 'unknown'}\n"
         f"Heuristic duplicate risk: {duplicate_risk} ({duplicate_reason})\n"
         f"Heuristic quality risk: {quality_risk} ({'; '.join(quality_issues) or 'no issues'})\n"
         f"Heuristic best posting times: {best_times} ({best_reason})\n"
