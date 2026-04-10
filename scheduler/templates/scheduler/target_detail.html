@@ -10,7 +10,7 @@
         {% if target.facebook_account %}Facebook: {{ target.facebook_account.display_name }}{% endif %}
         {% if target.instagram_account %} | Instagram: {{ target.instagram_account.display_name }}{% endif %}
     </p>
-    <p class="muted">Service account email to share on Google Drive: <strong>{{ settings.GOOGLE_SERVICE_ACCOUNT_EMAIL|default:"Set GOOGLE_SERVICE_ACCOUNT_EMAIL in env" }}</strong></p>
+    <p class="muted">Service account email to share on Google Drive: <strong>{{ app_settings.google_service_account_email|default:"Set GOOGLE_SERVICE_ACCOUNT_EMAIL in env" }}</strong></p>
 
     <div class="health-grid" style="margin-bottom: 16px;">
         <div class="health-tile">
@@ -25,7 +25,7 @@
         <div class="health-tile">
             <strong>Caption</strong>
             <div class="target-meta" style="margin-top: 8px;">
-                <span>{% if health.caption_found %}caption.txt found{% elif target.default_caption %}default caption set{% else %}fallback to filename{% endif %}</span>
+                <span>{% if health.caption_found %}caption.txt found{% elif target.default_caption %}default caption set{% else %}no caption configured{% endif %}</span>
             </div>
         </div>
         <div class="health-tile">

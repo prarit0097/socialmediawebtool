@@ -56,6 +56,14 @@ def _normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
+def _target_niche(target: PublishingTarget) -> str:
+    if target.sync_key in settings.AI_TARGET_NICHE_MAP:
+        return settings.AI_TARGET_NICHE_MAP[target.sync_key]
+    if str(target.pk) in settings.AI_TARGET_NICHE_MAP:
+        return settings.AI_TARGET_NICHE_MAP[str(target.pk)]
+    return settings.AI_DEFAULT_NICHE
+
+
 def _json_response_text(data: dict) -> str:
     if data.get("output_text"):
         return data["output_text"]
@@ -320,6 +328,7 @@ def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:
         f"Profile: {target.display_name}\n"
         f"Tone: {target.ai_tone}\n"
         f"Preferred language: {target.ai_language}\n"
+        f"Content niche: {_target_niche(target)}\n"
         f"Existing default caption: {target.default_caption[:1500]}\n"
         f"File name: {file_name}\n"
         f"File type: {file_obj.get('mimeType', '')}\n"
@@ -327,7 +336,7 @@ def _ai_payload_from_context(target: PublishingTarget, file_obj: dict) -> dict:
         f"Heuristic duplicate risk: {duplicate_risk} ({duplicate_reason})\n"
         f"Heuristic quality risk: {quality_risk} ({'; '.join(quality_issues) or 'no issues'})\n"
         f"Heuristic best posting times: {best_times} ({best_reason})\n"
-        "Generate smart posting guidance for health/wellness social media use."
+        "Generate smart posting guidance for this exact niche. Favor original, human-sounding, non-spammy copy."
     )
     candidates = _build_model_candidates()
     candidate_errors = []

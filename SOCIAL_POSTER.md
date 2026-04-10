@@ -24,6 +24,8 @@ Simple words me:
 - Instagram ke liye image aur video/reels flow try kar sakti hai
 - Telegram par daily report bhej sakti hai
 - recent logs aur health status dikha sakti hai
+- optional app-admin credentials ke saath dashboard access ko protect kar sakti hai
+- cached media based publishing readiness audit aur metrics export command de sakti hai
 
 ## App Ka Flow Kaise Kaam Karta Hai
 1. User Meta token add karta hai.
@@ -42,6 +44,7 @@ Simple words me:
 - `caption.txt` file ko caption source ke roop me use kiya ja sakta hai.
 - Instagram image ko app optimized JPEG me convert karke bhejne ki koshish karti hai.
 - Google Drive file ko pehle cached public asset me materialize karke Meta ko stable URL diya jata hai.
+- existing DB posting progress ko reset/clear kiye bina current scheduler state se hi aage continue karna hai.
 
 ## Folder Me Kaunsi Files Rakhni Chahiye
 Recommended:
@@ -151,6 +154,16 @@ python manage.py run_scheduler
 ### Tests
 ```powershell
 .\.venv\Scripts\python.exe manage.py test
+```
+
+### Publish Readiness Audit
+```powershell
+.\.venv\Scripts\python.exe manage.py audit_publish_readiness
+```
+
+### Export Tool Post Metrics
+```powershell
+.\.venv\Scripts\python.exe manage.py export_post_metrics --days 7 --output .\metrics.csv
 ```
 
 ## VPS Live Deploy Commands
@@ -282,3 +295,14 @@ systemctl status socialposter-scheduler.service --no-pager
 - All 33 existing tests pass with these changes.
 2026-03-30
 - `SOCIAL_POSTER.md` aur `README.md` me exact VPS deployment commands add ki gayi hain, including live app folder `/opt/drive-to-meta-scheduler/app`, `git pull`, `systemctl restart`, version verification, manual Telegram report test, aur logs check commands.
+2026-04-10
+- No-DB-touch hardening pass add kiya gaya: live scheduling progression aur existing posting history ko preserve rakhte hue code ko secure/configurable side par tighten kiya gaya.
+- Dashboard aur target settings pages ke liye optional app-level basic-auth gate add ki gayi. Agar `APP_ADMIN_USERNAME` aur `APP_ADMIN_PASSWORD` env me set hon, to panel protected ho jayega.
+- Production safety env knobs add kiye gaye: SSL redirect, secure cookies, HSTS, forwarded-proto handling, legacy public-media fallback toggle, aur AI niche mapping config.
+- Publishing path me compliance preflight add hua: missing tokens, unsupported media states, aur Instagram ke liye missing public HTTPS base ko publish se pehle detect karke clear block reason diya jata hai.
+- Google Drive file ko public `anyone` permission dene wali normal publish step hata di gayi. App ab cached app-hosted media path ko prefer karti hai; old proxy/Drive URL fallback sirf explicit env toggle ke saath use hoga.
+- AI prompt ko hardcoded health/wellness context se hatakar configurable niche-based guidance par shift kiya gaya, taaki different targets ke liye zyada natural/original caption guidance mil sake.
+- New no-DB tooling add hua:
+  - `manage.py audit_publish_readiness`
+  - `manage.py export_post_metrics --output ...`
+- Automated coverage 33 se badhkar 40 tests tak gayi, jisme admin auth gate, compliance warnings/blocks, aur metrics export workflow cover hua.

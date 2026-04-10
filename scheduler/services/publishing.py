@@ -11,12 +11,11 @@ from django.utils import timezone
 from scheduler.models import PostLog, PublishingTarget, SocialAccount
 from scheduler.services.ai import AIServiceError, build_ai_caption_for_media
 from scheduler.services.cache import build_public_asset_url, ensure_cached_asset, get_cached_public_urls
+from scheduler.services.compliance import evaluate_publish_readiness
 from scheduler.services.diagnostics import build_rejection_diagnostics
 from scheduler.services.drive import (
     DriveConfigError,
-    ensure_public_file,
     find_caption_file,
-    get_drive_service,
     get_public_media_urls,
     get_publishable_file_url,
     is_publishable_media,
@@ -297,9 +296,9 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     media_urls = []
     if asset and is_public_base_ready():
         media_urls = [build_public_asset_url(asset)]
-    if not media_urls:
+    if not media_urls and settings.ALLOW_LEGACY_PUBLIC_MEDIA_FALLBACK:
         media_urls = build_proxy_urls(target.id, file_obj["id"], file_obj.get("name", "media")) if is_public_base_ready() else []
-    if not media_urls:
+    if not media_urls and settings.ALLOW_LEGACY_PUBLIC_MEDIA_FALLBACK:
         media_urls = get_public_media_urls(file_obj)
     for media_url in media_urls:
         try:
@@ -342,9 +341,9 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
     mime_type = file_obj.get("mimeType", "")
     variant = "instagram_image" if mime_type.startswith("image/") else ""
     media_urls = get_cached_public_urls(target, file_obj, variant=variant or "default")
-    if not media_urls:
+    if not media_urls and settings.ALLOW_LEGACY_PUBLIC_MEDIA_FALLBACK:
         media_urls = build_proxy_urls(target.id, file_obj["id"], file_obj.get("name", "media"), variant=variant) if is_public_base_ready() else []
-    if not media_urls:
+    if not media_urls and settings.ALLOW_LEGACY_PUBLIC_MEDIA_FALLBACK:
         media_urls = get_public_media_urls(file_obj)
     for media_url in media_urls:
         try:
@@ -395,10 +394,10 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
     file_obj = file_obj or _get_slot_locked_file(target, scheduled_for)
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
         return
-    try:
-        ensure_public_file(get_drive_service(), file_obj["id"])
-    except Exception:
-        pass
+    caption = build_caption(target, file_obj=file_obj)
+    compliance = evaluate_publish_readiness(target, platform, file_obj, caption)
+    if compliance.is_blocked:
+        raise PublishingError(" | ".join(compliance.blocking_issues))
 
     log = PostLog.objects.create(
         target=target,
@@ -412,11 +411,13 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
         log.status = PostLog.STATUS_SUCCESS
         log.published_at = timezone.now()
         log.meta_creation_id = creation_id
-        log.message = f"{platform.title()} post published."
+        warning_suffix = f" Warnings: {' ; '.join(compliance.warnings)}" if compliance.warnings else ""
+        log.message = f"{platform.title()} post published.{warning_suffix}"
         log.save()
     except Exception as exc:
         log.status = PostLog.STATUS_FAILED
-        log.message = build_rejection_diagnostics(platform, file_obj, str(exc))
+        warning_suffix = f" | Preflight warnings: {' ; '.join(compliance.warnings)}" if compliance.warnings else ""
+        log.message = build_rejection_diagnostics(platform, file_obj, str(exc)) + warning_suffix
         log.save()
         raise
 

@@ -12,6 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .forms import MetaCredentialForm, PublishingTargetForm
 from .models import AIMediaInsight, MediaAsset, MetaCredential, PublishingTarget
+from .services.auth import app_admin_required
 from .services.ai import AIServiceError, ai_is_configured, get_or_generate_media_insight
 from .services.drive import download_drive_file, get_drive_file_metadata
 from .services.health import build_target_health
@@ -34,6 +35,7 @@ def _run_test_post_async(target_id: int) -> None:
 
 
 @require_http_methods(["GET", "POST"])
+@app_admin_required
 def dashboard(request):
     if request.method == "POST":
         action = request.POST.get("action")
@@ -98,6 +100,7 @@ def dashboard(request):
 
 
 @require_http_methods(["GET", "POST"])
+@app_admin_required
 def target_detail(request, pk):
     target = get_object_or_404(
         PublishingTarget.objects.select_related("facebook_account", "instagram_account", "credential"),

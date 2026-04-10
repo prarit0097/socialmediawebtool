@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -23,6 +24,26 @@ load_dotenv(BASE_DIR / ".env")
 
 def get_env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
+
+
+def get_env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_env_json_dict(name: str) -> dict[str, str]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): str(value).strip() for key, value in parsed.items() if str(value).strip()}
 
 
 def build_csrf_trusted_origins() -> list[str]:
@@ -103,6 +124,16 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_CACHE_DIR = BASE_DIR / "media_cache"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+SECURE_HSTS_SECONDS = int(os.getenv("DJANGO_SECURE_HSTS_SECONDS", "31536000" if not DEBUG else "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = get_env_bool("DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", not DEBUG)
+SECURE_HSTS_PRELOAD = get_env_bool("DJANGO_SECURE_HSTS_PRELOAD", not DEBUG)
+SECURE_SSL_REDIRECT = get_env_bool("DJANGO_SECURE_SSL_REDIRECT", not DEBUG)
+SESSION_COOKIE_SECURE = get_env_bool("DJANGO_SESSION_COOKIE_SECURE", not DEBUG)
+CSRF_COOKIE_SECURE = get_env_bool("DJANGO_CSRF_COOKIE_SECURE", not DEBUG)
+SECURE_CONTENT_TYPE_NOSNIFF = get_env_bool("DJANGO_SECURE_CONTENT_TYPE_NOSNIFF", True)
+X_FRAME_OPTIONS = os.getenv("DJANGO_X_FRAME_OPTIONS", "DENY")
+if get_env_bool("DJANGO_USE_X_FORWARDED_PROTO", not DEBUG):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
@@ -130,3 +161,9 @@ AI_TIMEOUT_SECONDS = int(os.getenv("AI_TIMEOUT_SECONDS", "90"))
 INSTAGRAM_CONTAINER_POLL_SECONDS = int(os.getenv("INSTAGRAM_CONTAINER_POLL_SECONDS", "5"))
 INSTAGRAM_CONTAINER_MAX_POLLS = int(os.getenv("INSTAGRAM_CONTAINER_MAX_POLLS", "24"))
 HEALTH_CACHE_TTL_SECONDS = int(os.getenv("HEALTH_CACHE_TTL_SECONDS", "120"))
+APP_ADMIN_USERNAME = os.getenv("APP_ADMIN_USERNAME", "")
+APP_ADMIN_PASSWORD = os.getenv("APP_ADMIN_PASSWORD", "")
+APP_ADMIN_REALM = os.getenv("APP_ADMIN_REALM", "Social Poster Admin")
+ALLOW_LEGACY_PUBLIC_MEDIA_FALLBACK = get_env_bool("ALLOW_LEGACY_PUBLIC_MEDIA_FALLBACK", False)
+AI_DEFAULT_NICHE = os.getenv("AI_DEFAULT_NICHE", "general").strip() or "general"
+AI_TARGET_NICHE_MAP = get_env_json_dict("AI_TARGET_NICHE_MAP_JSON")

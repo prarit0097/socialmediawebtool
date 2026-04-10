@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.cache import cache
 
 from scheduler.models import PostLog, PublishingTarget
+from scheduler.services.compliance import build_target_policy_warnings
 from scheduler.services.drive import DriveConfigError, find_caption_file, is_publishable_media, list_folder_files
 from scheduler.services.proxy import is_public_base_ready
 
@@ -45,7 +46,9 @@ def build_target_health(target: PublishingTarget) -> dict:
         issues.append("No caption configured (caption.txt or default caption missing). Posts will be published without a caption, which hurts engagement.")
 
     if (target.facebook_account or target.instagram_account) and not is_public_base_ready():
-        issues.append("PUBLIC_APP_BASE_URL is missing or local-only. Meta cannot fetch proxy media from localhost.")
+        issues.append("PUBLIC_APP_BASE_URL is missing or local-only. Instagram and cached-media publishing need a public HTTPS app URL.")
+
+    issues.extend(build_target_policy_warnings(target))
 
     latest_logs = list(target.post_logs.order_by("-created_at").values("platform", "status", "message", "drive_file_name")[:5])
     overall = "ready" if not issues else "warning"

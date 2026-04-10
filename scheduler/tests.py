@@ -1,7 +1,10 @@
+import base64
 from datetime import datetime, time
 from io import BytesIO
+import tempfile
 
 from PIL import Image
+from django.core.management import call_command
 from django.core.cache import cache
 from django.test import TestCase
 from django.test.utils import override_settings
@@ -11,8 +14,10 @@ from .forms import PublishingTargetForm
 from .models import MetaCredential, PublishingTarget
 from .services.diagnostics import build_rejection_diagnostics
 from .services.ai import _build_model_candidates, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
+from .services.compliance import evaluate_publish_readiness
 from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
+from .services.metrics import iter_tool_post_metrics
 from .services.media_transform import build_instagram_ready_image
 from .services.publishing import _platform_already_succeeded_for_file, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
@@ -132,6 +137,20 @@ class ProxyHelpersTest(TestCase):
         payload = unsign_media_token(token)
         self.assertEqual(payload["target_id"], 16)
         self.assertEqual(payload["file_id"], "file123")
+
+
+class AdminAuthGateTest(TestCase):
+    @override_settings(DEBUG=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    def test_dashboard_requires_basic_auth_when_admin_credentials_are_configured(self):
+        response = self.client.get(reverse("scheduler:dashboard"))
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Basic", response.headers["WWW-Authenticate"])
+
+    @override_settings(DEBUG=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    def test_dashboard_allows_valid_basic_auth(self):
+        credentials = base64.b64encode(b"admin:secret").decode("ascii")
+        response = self.client.get(reverse("scheduler:dashboard"), HTTP_AUTHORIZATION=f"Basic {credentials}")
+        self.assertEqual(response.status_code, 200)
 
 
 class DiagnosticsTest(TestCase):
@@ -693,6 +712,54 @@ class SharedQueueTest(TestCase):
                 pick_next_shared_file(target)
 
 
+class ComplianceTest(TestCase):
+    @override_settings(PUBLIC_APP_BASE_URL="")
+    def test_instagram_publish_is_blocked_without_public_base_url(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig-1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:block",
+            display_name="IG Block",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+
+        result = evaluate_publish_readiness(
+            target,
+            "instagram",
+            {"id": "file1", "name": "POST1.mp4", "mimeType": "video/mp4"},
+            "Caption",
+        )
+
+        self.assertTrue(result.is_blocked)
+        self.assertIn("PUBLIC_APP_BASE_URL", " | ".join(result.blocking_issues))
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://demo.ngrok-free.dev")
+    def test_temporary_public_host_is_reported_as_warning(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb-1", name="FB", access_token="page-token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:warn",
+            display_name="FB Warn",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+
+        result = evaluate_publish_readiness(
+            target,
+            "facebook",
+            {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg"},
+            "Caption",
+        )
+
+        self.assertFalse(result.is_blocked)
+        self.assertIn("temporary tunnel host", " | ".join(result.warnings))
+
+
 class HealthTest(TestCase):
     def setUp(self):
         cache.clear()
@@ -724,6 +791,13 @@ class HealthTest(TestCase):
         self.assertEqual(first["file_count"], 1)
         self.assertEqual(second["file_count"], 1)
         list_mock.assert_called_once_with("folder")
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://demo.ngrok-free.dev")
+    def test_health_reports_temporary_public_host_warning(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(credential=credential, sync_key="fb:hostwarn", display_name="Host Warn")
+        health = build_target_health(target)
+        self.assertIn("temporary tunnel host", " | ".join(health["issues"]))
 
 
 class MediaTransformTest(TestCase):
@@ -785,3 +859,50 @@ class PostingTimesFormTest(TestCase):
         )
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["posting_times"], ["09:00", "12:00", "18:00"])
+
+
+class MetricsExportTest(TestCase):
+    def test_iter_tool_post_metrics_returns_exportable_row(self):
+        from unittest.mock import patch
+        from django.utils import timezone
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb-metric", name="FB", access_token="page-token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:metric",
+            display_name="Metric Target",
+            facebook_account=fb,
+        )
+        target.post_logs.create(
+            platform="facebook",
+            scheduled_for=timezone.now(),
+            published_at=timezone.now(),
+            status="success",
+            drive_file_id="file1",
+            drive_file_name="POST1.jpeg",
+            meta_creation_id="post-1",
+        )
+
+        with patch("scheduler.services.metrics.fetch_facebook_metrics", return_value={"permalink_url": "https://example.com/post-1", "reaction_count": "9"}):
+            rows = iter_tool_post_metrics(target=target, days=7)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["post_id"], "post-1")
+        self.assertEqual(rows[0]["permalink"], "https://example.com/post-1")
+
+    def test_export_post_metrics_command_writes_csv_without_db_changes(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = f"{temp_dir}/metrics.csv"
+            with patch(
+                "scheduler.management.commands.export_post_metrics.iter_tool_post_metrics",
+                return_value=[{"source": "tool", "platform": "facebook", "post_id": "post-1"}],
+            ):
+                call_command("export_post_metrics", "--output", output_path)
+
+            with open(output_path, "r", encoding="utf-8") as handle:
+                data = handle.read()
+
+        self.assertIn("post-1", data)

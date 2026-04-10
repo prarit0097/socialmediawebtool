@@ -115,6 +115,9 @@
         <div class="hero">
             <h1>Drive to Meta Scheduler</h1>
             <p>Meta access token, Facebook pages, Instagram business accounts, Google Drive folder mapping, daily posting cadence, and 9 AM Telegram reporting in one Django panel.</p>
+            {% if app_settings.app_admin_configured %}
+                <p class="muted">Admin access is protected by app-level credentials.</p>
+            {% endif %}
         </div>
         {% if messages %}
             <ul class="messages">
