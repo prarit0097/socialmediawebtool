@@ -19,7 +19,7 @@ from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.metrics import fetch_facebook_metrics, iter_tool_post_metrics
 from .services.media_transform import build_instagram_ready_image
-from .services.publishing import _platform_already_succeeded_for_file, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
+from .services.publishing import _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 from .services.telegram import TELEGRAM_MESSAGE_MAX_LENGTH, _split_telegram_message, build_daily_report_message
 
@@ -841,6 +841,38 @@ class InstagramPublishTest(TestCase):
         self.assertEqual(result, "publish-1")
         wait_mock.assert_called_once_with("container-1", "page-token")
         self.assertEqual(graph_post_mock.call_count, 2)
+
+
+class FacebookPublishTest(TestCase):
+    def test_facebook_video_publish_does_not_send_filename_based_title(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:video",
+            display_name="FB Video",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            default_caption="Human caption",
+        )
+        file_obj = {"id": "file1", "name": "500+ Viral Health Awareness Reels by Digital Ceo Official57.mp4", "mimeType": "video/mp4"}
+
+        with patch("scheduler.services.publishing.ensure_cached_asset") as ensure_asset_mock, patch(
+            "scheduler.services.publishing._graph_post_multipart",
+            return_value={"id": "video-1"},
+        ) as post_multipart_mock:
+            asset = ensure_asset_mock.return_value
+            asset.local_path = __file__
+            asset.public_filename = "video.mp4"
+            asset.content_type = "video/mp4"
+            result = _publish_to_facebook(target, file_obj)
+
+        self.assertEqual(result, "video-1")
+        payload = post_multipart_mock.call_args.args[2]
+        self.assertNotIn("title", payload)
+        self.assertEqual(payload["description"], "Human caption")
 
 
 class PostingTimesFormTest(TestCase):

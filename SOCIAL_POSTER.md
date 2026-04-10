@@ -307,3 +307,4 @@ systemctl status socialposter-scheduler.service --no-pager
   - `manage.py export_post_metrics --output ...`
 - Automated coverage 33 se badhkar 40 tests tak gayi, jisme admin auth gate, compliance warnings/blocks, aur metrics export workflow cover hua.
 - Facebook metrics exporter ko reel/video IDs ke liye harden kiya gaya. Ab page-post ID aur video/reel ID ko alag handle karke exporter `reactions` field error se bachti hai aur reel-style Facebook publishes ke liye metrics resolve karne ki better koshish karti hai.
+- Facebook video publish payload se raw filename-derived `title` hata diya gaya. Ab tool publish ke dauran noisy file-name metadata Facebook reel object par leak nahi hota; focus sirf human caption/description par rehta hai.

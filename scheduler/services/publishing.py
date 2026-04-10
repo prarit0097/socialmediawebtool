@@ -234,12 +234,6 @@ def build_caption(target: PublishingTarget, file_obj: dict | None = None) -> str
     return response.text.strip().replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _build_media_title(file_obj: dict) -> str:
-    name = file_obj.get("name", "Media")
-    stem = Path(name).stem.strip() or "Media"
-    return stem[:120]
-
-
 def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     if not target.facebook_account:
         return ""
@@ -270,7 +264,6 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
                     f"/{target.facebook_account.external_id}/videos",
                     token,
                     {
-                        "title": _build_media_title(file_obj),
                         "description": caption,
                         "published": "true",
                     },
@@ -308,7 +301,6 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
                     token,
                     {
                         "file_url": media_url,
-                        "title": _build_media_title(file_obj),
                         "description": caption,
                         "published": "true",
                     },
