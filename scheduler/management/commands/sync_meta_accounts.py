@@ -10,7 +10,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         for credential in MetaCredential.objects.filter(is_active=True):
             try:
-                sync_credential_accounts(credential)
-                self.stdout.write(self.style.SUCCESS(f"Synced {credential.label}"))
+                result = sync_credential_accounts(credential)
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"Synced {credential.label}: reused={result['reused']} created={result['created']} missing={result['missing']}"
+                    )
+                )
             except MetaAPIError as exc:
                 self.stderr.write(f"Failed {credential.label}: {exc}")

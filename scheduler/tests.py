@@ -9,9 +9,10 @@ from django.core.cache import cache
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from .forms import PublishingTargetForm
-from .models import MetaCredential, PublishingTarget
+from .models import MetaCredential, PublishingTarget, SocialAccount
 from .services.diagnostics import build_rejection_diagnostics
 from .services.ai import _build_model_candidates, _clean_media_name_context, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.compliance import evaluate_publish_readiness
@@ -47,6 +48,257 @@ class DriveHelpersTest(TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["id"], "1")
         self.assertEqual(result[1]["id"], "2")
+
+
+class MetaSyncPreservationTest(TestCase):
+    def _asset_bundle(self, pages=None, instagram_accounts=None, me=None):
+        from .services.meta import AssetBundle
+
+        return AssetBundle(
+            pages=pages or [],
+            instagram_accounts=instagram_accounts or [],
+            me=me or {"id": "user-new", "name": "New Meta User"},
+        )
+
+    def test_sync_reuses_existing_pair_and_preserves_scheduling_settings(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        old_credential = MetaCredential.objects.create(label="Old", access_token="old-token")
+        old_fb = old_credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-1", name="Old FB")
+        old_ig = old_credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-1", name="old_ig")
+        target = PublishingTarget.objects.create(
+            credential=old_credential,
+            sync_key="fb:fb-1|ig:ig-1",
+            display_name="Old Pair",
+            facebook_account=old_fb,
+            instagram_account=old_ig,
+            drive_folder_id="drive-folder",
+            drive_folder_url="https://drive.google.com/drive/folders/drive-folder",
+            posts_per_day=3,
+            posting_times=["09:00", "12:00", "18:00"],
+            default_caption="Keep this caption",
+            ai_enabled=True,
+            ai_auto_caption_enabled=True,
+            ai_language="Hindi",
+            ai_tone="Warm",
+            last_status="success",
+        )
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=timezone.make_aware(datetime(2026, 3, 22, 9, 0)),
+            status="success",
+            drive_file_id="file-1",
+            drive_file_name="POST1.jpeg",
+        )
+
+        new_credential = MetaCredential.objects.create(label="New", access_token="new-token")
+        assets = self._asset_bundle(
+            pages=[
+                {
+                    "id": "fb-1",
+                    "name": "New FB Name",
+                    "access_token": "new-page-token",
+                    "instagram_business_account": {"id": "ig-1", "username": "new_ig", "name": "New IG Name"},
+                }
+            ]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            result = sync_credential_accounts(new_credential)
+
+        target.refresh_from_db()
+        self.assertEqual(PublishingTarget.objects.count(), 1)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["reused"], 1)
+        self.assertEqual(target.credential, new_credential)
+        self.assertEqual(target.drive_folder_id, "drive-folder")
+        self.assertEqual(target.drive_folder_url, "https://drive.google.com/drive/folders/drive-folder")
+        self.assertEqual(target.posts_per_day, 3)
+        self.assertEqual(target.posting_times, ["09:00", "12:00", "18:00"])
+        self.assertEqual(target.default_caption, "Keep this caption")
+        self.assertTrue(target.ai_enabled)
+        self.assertTrue(target.ai_auto_caption_enabled)
+        self.assertEqual(target.ai_language, "Hindi")
+        self.assertEqual(target.ai_tone, "Warm")
+        self.assertTrue(target.is_active)
+        self.assertEqual(target.last_status, "success")
+        self.assertEqual(target.post_logs.count(), 1)
+        self.assertEqual(target.facebook_account.access_token, "new-page-token")
+        self.assertEqual(target.instagram_account.external_id, "ig-1")
+
+    def test_sync_upgrades_existing_facebook_only_target_to_pair_without_losing_settings(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        credential = MetaCredential.objects.create(label="Token", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-2", name="FB")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-2",
+            display_name="FB Only",
+            facebook_account=fb,
+            drive_folder_id="folder-2",
+            posts_per_day=2,
+            posting_times=["10:00", "17:00"],
+            default_caption="Still here",
+        )
+        assets = self._asset_bundle(
+            pages=[
+                {
+                    "id": "fb-2",
+                    "name": "FB",
+                    "access_token": "page-token",
+                    "instagram_business_account": {"id": "ig-2", "username": "ig_two", "name": "IG Two"},
+                }
+            ]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            sync_credential_accounts(credential)
+
+        target.refresh_from_db()
+        self.assertEqual(PublishingTarget.objects.count(), 1)
+        self.assertEqual(target.sync_key, "fb:fb-2|ig:ig-2")
+        self.assertEqual(target.drive_folder_id, "folder-2")
+        self.assertEqual(target.posting_times, ["10:00", "17:00"])
+        self.assertEqual(target.default_caption, "Still here")
+        self.assertEqual(target.instagram_account.external_id, "ig-2")
+
+    def test_sync_does_not_create_duplicate_for_same_pair_under_new_credential(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        old_credential = MetaCredential.objects.create(label="Old", access_token="old-token")
+        old_fb = old_credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-3", name="FB")
+        old_ig = old_credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-3", name="IG")
+        PublishingTarget.objects.create(
+            credential=old_credential,
+            sync_key="fb:fb-3|ig:ig-3",
+            display_name="Configured Pair",
+            facebook_account=old_fb,
+            instagram_account=old_ig,
+            drive_folder_id="folder-3",
+        )
+        new_credential = MetaCredential.objects.create(label="New", access_token="new-token")
+        assets = self._asset_bundle(
+            pages=[
+                {
+                    "id": "fb-3",
+                    "name": "FB",
+                    "access_token": "page-token",
+                    "instagram_business_account": {"id": "ig-3", "username": "ig_three", "name": "IG"},
+                }
+            ]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            sync_credential_accounts(new_credential)
+
+        self.assertEqual(PublishingTarget.objects.count(), 1)
+        target = PublishingTarget.objects.get()
+        self.assertEqual(target.credential, new_credential)
+        self.assertEqual(target.drive_folder_id, "folder-3")
+
+    def test_sync_retires_empty_duplicate_when_configured_target_becomes_pair(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        credential = MetaCredential.objects.create(label="Token", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-dupe", name="FB")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-dupe", name="IG")
+        configured = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-dupe",
+            display_name="Configured FB",
+            facebook_account=fb,
+            drive_folder_id="configured-folder",
+            posting_times=["09:00", "18:00"],
+            posts_per_day=2,
+        )
+        empty_duplicate = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-dupe|ig:ig-dupe",
+            display_name="Empty Pair",
+            facebook_account=fb,
+            instagram_account=ig,
+        )
+        assets = self._asset_bundle(
+            pages=[
+                {
+                    "id": "fb-dupe",
+                    "name": "FB",
+                    "access_token": "page-token",
+                    "instagram_business_account": {"id": "ig-dupe", "username": "ig_dupe", "name": "IG"},
+                }
+            ]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            sync_credential_accounts(credential)
+
+        configured.refresh_from_db()
+        empty_duplicate.refresh_from_db()
+        self.assertEqual(configured.sync_key, "fb:fb-dupe|ig:ig-dupe")
+        self.assertEqual(configured.drive_folder_id, "configured-folder")
+        self.assertEqual(configured.posting_times, ["09:00", "18:00"])
+        self.assertTrue(configured.is_active)
+        self.assertFalse(empty_duplicate.is_active)
+        self.assertTrue(empty_duplicate.sync_key.startswith("archived:"))
+        self.assertIn("Merged into target", empty_duplicate.last_error)
+        self.assertEqual(PublishingTarget.objects.filter(is_active=True).count(), 1)
+
+    def test_sync_missing_response_does_not_deactivate_configured_target(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        credential = MetaCredential.objects.create(label="Token", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-4", name="FB")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-4",
+            display_name="Configured",
+            facebook_account=fb,
+            drive_folder_id="folder-4",
+            posts_per_day=4,
+            posting_times=["09:00", "11:00", "15:00", "19:00"],
+            is_active=True,
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=self._asset_bundle()):
+            result = sync_credential_accounts(credential)
+
+        target.refresh_from_db()
+        self.assertTrue(target.is_active)
+        self.assertEqual(target.drive_folder_id, "folder-4")
+        self.assertEqual(target.posting_times, ["09:00", "11:00", "15:00", "19:00"])
+        self.assertIn("not returned", target.last_error)
+        self.assertEqual(result["missing"], 1)
+
+    def test_sync_creates_new_default_target_for_new_page(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        credential = MetaCredential.objects.create(label="Token", access_token="token")
+        assets = self._asset_bundle(
+            pages=[
+                {
+                    "id": "fb-new",
+                    "name": "Fresh Page",
+                    "access_token": "page-token",
+                }
+            ]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            result = sync_credential_accounts(credential)
+
+        target = PublishingTarget.objects.get()
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(target.sync_key, "fb:fb-new")
+        self.assertEqual(target.display_name, "Fresh Page")
+        self.assertEqual(target.drive_folder_id, "")
+        self.assertEqual(target.posts_per_day, 1)
 
 
 class SchedulingTest(TestCase):

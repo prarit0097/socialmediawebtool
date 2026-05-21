@@ -44,16 +44,29 @@ def dashboard(request):
             if form.is_valid():
                 credential = form.save()
                 try:
-                    sync_credential_accounts(credential)
-                    messages.success(request, "Meta token saved and accounts synced.")
+                    result = sync_credential_accounts(credential)
+                    messages.success(
+                        request,
+                        (
+                            "Meta token saved and accounts synced. "
+                            f"Existing settings preserved for {result['reused']} target(s); "
+                            f"{result['created']} new target(s) added."
+                        ),
+                    )
                 except MetaAPIError as exc:
                     messages.error(request, f"Token saved, but sync failed: {exc}")
                 return redirect("scheduler:dashboard")
         elif action == "sync_credential":
             credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
             try:
-                sync_credential_accounts(credential)
-                messages.success(request, f"{credential.label} synced.")
+                result = sync_credential_accounts(credential)
+                messages.success(
+                    request,
+                    (
+                        f"{credential.label} synced. Existing settings preserved for "
+                        f"{result['reused']} target(s); {result['created']} new target(s) added."
+                    ),
+                )
             except MetaAPIError as exc:
                 messages.error(request, f"Sync failed: {exc}")
             return redirect("scheduler:dashboard")

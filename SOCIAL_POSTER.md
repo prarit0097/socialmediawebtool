@@ -263,6 +263,7 @@ systemctl status socialposter-scheduler.service --no-pager
 - Hostinger VPS deployment latest repo commits tak sync ki ja chuki hai
 - Hostinger nginx `X-Forwarded-Proto` forwarding fix ho chuki hai, isliye secure redirect loop issue resolve ho gaya
 - Metrics export aur manual-vs-tool compare workflow live VPS par verify ho chuka hai
+- Meta token sync ab non-destructive hai: naya/updated token save karne par same Facebook/Instagram page IDs ki existing Drive folder mapping, posting times, captions, AI settings, active status, cached media, aur post history preserve rehti hai. Sirf genuinely new pages/profiles new setup rows ke roop me add honge.
 
 ## Last Update
 2026-03-21
@@ -347,3 +348,9 @@ systemctl status socialposter-scheduler.service --no-pager
   - Facebook manual-vs-tool gap significantly larger mila.
   - Instagram manual-vs-tool gap smaller but real mila.
   - Facebook reel metadata aur Instagram automation-style filename context reduce karne wale changes push kiye gaye.
+2026-05-21
+- Meta token sync ko non-destructive banaya gaya. Ab app target ko sirf `sync_key` se nahi, balki stable Facebook/Instagram external IDs se match karti hai, isliye new/updated token ke saath existing scheduling settings wipe nahi hoti.
+- Facebook-only target agar later connected FB+IG pair ban jaye to wahi existing row upgrade hoti hai aur Drive folder, exact posting times, caption, AI settings, active status, cached assets, aur post logs preserve rehte hain.
+- Sync response me kisi purane configured target ke temporarily missing hone par app usko deactivate/delete nahi karegi; row par clear warning save hogi aur existing scheduling safe rahegi.
+- Dashboard sync message ab batata hai kitne existing targets preserve/reuse hue aur kitne new targets add hue.
+- Meta sync preservation ke regression tests add hue: same pair under new token, FB-only to FB+IG upgrade, duplicate prevention, missing response preservation, aur new page creation.
