@@ -26,7 +26,11 @@ def _graph_get(path: str, access_token: str, params: dict | None = None) -> dict
     if params:
         query.update(params)
     response = requests.get(f"{settings.META_GRAPH_BASE_URL}{path}", params=query, timeout=30)
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        snippet = (response.text or "").strip()[:300] or "<empty response body>"
+        raise MetaAPIError(f"Meta returned a non-JSON response (status {response.status_code}): {snippet}")
     if response.status_code >= 400 or data.get("error"):
         message = data.get("error", {}).get("message", response.text)
         raise MetaAPIError(message)

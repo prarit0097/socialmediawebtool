@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import quote, urlencode, urljoin
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from django.conf import settings
 from django.core import signing
@@ -12,7 +12,9 @@ PROXY_SALT = "scheduler.media.proxy"
 
 def is_public_base_ready() -> bool:
     base = settings.PUBLIC_APP_BASE_URL.strip()
-    return bool(base and "localhost" not in base and "127.0.0.1" not in base)
+    parsed = urlparse(base)
+    host = parsed.hostname or ""
+    return bool(parsed.scheme == "https" and host and host not in {"localhost", "127.0.0.1"})
 
 
 def sign_media_token(target_id: int, file_id: str) -> str:

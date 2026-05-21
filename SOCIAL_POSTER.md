@@ -264,6 +264,7 @@ systemctl status socialposter-scheduler.service --no-pager
 - Hostinger nginx `X-Forwarded-Proto` forwarding fix ho chuki hai, isliye secure redirect loop issue resolve ho gaya
 - Metrics export aur manual-vs-tool compare workflow live VPS par verify ho chuka hai
 - Meta token sync ab non-destructive hai: naya/updated token save karne par same Facebook/Instagram page IDs ki existing Drive folder mapping, posting times, captions, AI settings, active status, cached media, aur post history preserve rehti hai. Sirf genuinely new pages/profiles new setup rows ke roop me add honge.
+- Code review ke baad extra hardening bhi active hai: `caption.txt` ab public Google URL se nahi balki service-account Drive download se read hota hai, `PUBLIC_APP_BASE_URL` ko real HTTPS URL hona zaroori hai, Meta sync non-JSON response ko clean error me dikhata hai, aur Facebook binary upload large video ko memory me poora load kiye bina stream karta hai.
 
 ## Last Update
 2026-03-21
@@ -354,3 +355,8 @@ systemctl status socialposter-scheduler.service --no-pager
 - Sync response me kisi purane configured target ke temporarily missing hone par app usko deactivate/delete nahi karegi; row par clear warning save hogi aur existing scheduling safe rahegi.
 - Dashboard sync message ab batata hai kitne existing targets preserve/reuse hue aur kitne new targets add hue.
 - Meta sync preservation ke regression tests add hue: same pair under new token, FB-only to FB+IG upgrade, duplicate prevention, missing response preservation, aur new page creation.
+- Full code review ke baad extra fixes add hue:
+  - `caption.txt` reading ko service-account Drive download par shift kiya gaya, taaki private/non-public Drive folder setup me captions break na hon.
+  - Public media base validation strict hui: Instagram/cached media ke liye `PUBLIC_APP_BASE_URL` ab HTTPS public URL hi maana jayega.
+  - Meta account sync me empty/non-JSON Graph response ab raw parser crash ke bajay readable `MetaAPIError` ban kar dikhega.
+  - Facebook direct binary upload ab local cached media file ko stream karta hai, large video ke liye unnecessary memory spike kam hota hai.

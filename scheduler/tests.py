@@ -50,6 +50,21 @@ class DriveHelpersTest(TestCase):
         self.assertEqual(result[1]["id"], "2")
 
 
+class MetaAPIClientTest(TestCase):
+    def test_graph_get_reports_non_json_response_cleanly(self):
+        from unittest.mock import MagicMock, patch
+        from .services.meta import MetaAPIError, _graph_get
+
+        response = MagicMock()
+        response.status_code = 502
+        response.text = "<html>bad gateway</html>"
+        response.json.side_effect = ValueError("No JSON")
+
+        with patch("scheduler.services.meta.requests.get", return_value=response):
+            with self.assertRaisesMessage(MetaAPIError, "non-JSON response"):
+                _graph_get("/me", "token")
+
+
 class MetaSyncPreservationTest(TestCase):
     def _asset_bundle(self, pages=None, instagram_accounts=None, me=None):
         from .services.meta import AssetBundle
@@ -389,6 +404,12 @@ class ProxyHelpersTest(TestCase):
         payload = unsign_media_token(token)
         self.assertEqual(payload["target_id"], 16)
         self.assertEqual(payload["file_id"], "file123")
+
+    @override_settings(PUBLIC_APP_BASE_URL="http://example.com")
+    def test_public_base_requires_https(self):
+        from .services.proxy import is_public_base_ready
+
+        self.assertFalse(is_public_base_ready())
 
 
 class AdminAuthGateTest(TestCase):
@@ -984,6 +1005,30 @@ class SharedQueueTest(TestCase):
         with patch("scheduler.services.publishing.list_folder_files", return_value=files):
             with self.assertRaisesMessage(Exception, "already been published on every active platform"):
                 pick_next_shared_file(target)
+
+    def test_caption_txt_is_downloaded_through_drive_service(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:caption",
+            display_name="Caption Target",
+            drive_folder_id="folder",
+        )
+        files = [
+            {"id": "caption-file", "name": "caption.txt", "mimeType": "text/plain"},
+            {"id": "media-file", "name": "POST1.jpeg", "mimeType": "image/jpeg"},
+        ]
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=files), patch(
+            "scheduler.services.publishing.download_drive_file",
+            return_value="Caption via service account".encode("utf-8"),
+        ) as download_mock:
+            caption = build_caption(target)
+
+        self.assertEqual(caption, "Caption via service account")
+        download_mock.assert_called_once_with("caption-file")
 
 
 class ComplianceTest(TestCase):

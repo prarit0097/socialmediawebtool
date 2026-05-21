@@ -15,9 +15,9 @@ from scheduler.services.compliance import evaluate_publish_readiness
 from scheduler.services.diagnostics import build_rejection_diagnostics
 from scheduler.services.drive import (
     DriveConfigError,
+    download_drive_file,
     find_caption_file,
     get_public_media_urls,
-    get_publishable_file_url,
     is_publishable_media,
     list_folder_files,
 )
@@ -229,9 +229,8 @@ def build_caption(target: PublishingTarget, file_obj: dict | None = None) -> str
     if not caption_file:
         return ""
 
-    response = requests.get(get_publishable_file_url(caption_file), timeout=30)
-    response.raise_for_status()
-    return response.text.strip().replace("\r\n", "\n").replace("\r", "\n")
+    caption_bytes = download_drive_file(caption_file["id"])
+    return caption_bytes.decode("utf-8-sig", errors="replace").strip().replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
@@ -256,31 +255,31 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     # and typically receives better algorithmic distribution from Meta.
     if asset and asset.local_path and Path(asset.local_path).exists():
         try:
-            file_bytes = Path(asset.local_path).read_bytes()
             filename = asset.public_filename or file_obj.get("name", "media")
             content_type = asset.content_type or mime_type or "application/octet-stream"
-            if mime_type.startswith("video/"):
-                result = _graph_post_multipart(
-                    f"/{target.facebook_account.external_id}/videos",
-                    token,
-                    {
-                        "description": caption,
-                        "published": "true",
-                    },
-                    "source",
-                    (filename, file_bytes, content_type),
-                )
-            else:
-                result = _graph_post_multipart(
-                    f"/{target.facebook_account.external_id}/photos",
-                    token,
-                    {
-                        "caption": caption,
-                        "published": "true",
-                    },
-                    "source",
-                    (filename, file_bytes, content_type),
-                )
+            with Path(asset.local_path).open("rb") as file_handle:
+                if mime_type.startswith("video/"):
+                    result = _graph_post_multipart(
+                        f"/{target.facebook_account.external_id}/videos",
+                        token,
+                        {
+                            "description": caption,
+                            "published": "true",
+                        },
+                        "source",
+                        (filename, file_handle, content_type),
+                    )
+                else:
+                    result = _graph_post_multipart(
+                        f"/{target.facebook_account.external_id}/photos",
+                        token,
+                        {
+                            "caption": caption,
+                            "published": "true",
+                        },
+                        "source",
+                        (filename, file_handle, content_type),
+                    )
             return result.get("post_id") or result.get("id", "")
         except PublishingError as exc:
             errors.append(f"binary upload -> {exc}")
