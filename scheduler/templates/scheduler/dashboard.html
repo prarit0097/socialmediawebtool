@@ -13,6 +13,7 @@
                 <div class="target-meta">
                     {% if item.target.facebook_account %}<span>FB: {{ item.target.facebook_account.display_name }}</span>{% endif %}
                     {% if item.target.instagram_account %}<span>IG: {{ item.target.instagram_account.display_name }}</span>{% endif %}
+                    <span>Token: {{ item.target.credential.label }}</span>
                     <span>Posts/day: {{ item.target.posts_per_day }}</span>
                     <span class="badge {{ item.health.overall }}">{{ item.health.overall }}</span>
                 </div>
@@ -105,6 +106,7 @@
                         <div class="target-meta">
                             <span>FB: {{ item.target.facebook_account.display_name }}</span>
                             <span>IG: {{ item.target.instagram_account.display_name }}</span>
+                            <span>Token: {{ item.target.credential.label }}</span>
                             <span>Posts/day: {{ item.target.posts_per_day }}</span>
                             <span>Status: {{ item.target.last_status|default:"idle" }}</span>
                             <span class="badge {{ item.health.overall }}">{{ item.health.overall }}</span>
@@ -133,6 +135,7 @@
                         <div class="target-meta">
                             {% if item.target.facebook_account %}<span>FB only</span>{% endif %}
                             {% if item.target.instagram_account %}<span>IG only</span>{% endif %}
+                            <span>Token: {{ item.target.credential.label }}</span>
                             <span>Posts/day: {{ item.target.posts_per_day }}</span>
                             <span>Status: {{ item.target.last_status|default:"idle" }}</span>
                             <span class="badge {{ item.health.overall }}">{{ item.health.overall }}</span>

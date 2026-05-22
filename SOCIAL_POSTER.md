@@ -264,6 +264,7 @@ systemctl status socialposter-scheduler.service --no-pager
 - Hostinger nginx `X-Forwarded-Proto` forwarding fix ho chuki hai, isliye secure redirect loop issue resolve ho gaya
 - Metrics export aur manual-vs-tool compare workflow live VPS par verify ho chuka hai
 - Meta token sync ab non-destructive hai: naya/updated token save karne par same Facebook/Instagram page IDs ki existing Drive folder mapping, posting times, captions, AI settings, active status, cached media, aur post history preserve rehti hai. Sirf genuinely new pages/profiles new setup rows ke roop me add honge.
+- Multi-token sync ab safer hai: agar new Meta token me koi page/account pehle se kisi aur saved token ke under configured hai, app us existing target ko move ya overwrite nahi karegi. Duplicate ko skip karke original target ki settings, token ownership, cached media, aur history same rakhegi.
 - Code review ke baad extra hardening bhi active hai: `caption.txt` ab public Google URL se nahi balki service-account Drive download se read hota hai, `PUBLIC_APP_BASE_URL` ko real HTTPS URL hona zaroori hai, Meta sync non-JSON response ko clean error me dikhata hai, aur Facebook binary upload large video ko memory me poora load kiye bina stream karta hai.
 
 ## Last Update
@@ -360,3 +361,9 @@ systemctl status socialposter-scheduler.service --no-pager
   - Public media base validation strict hui: Instagram/cached media ke liye `PUBLIC_APP_BASE_URL` ab HTTPS public URL hi maana jayega.
   - Meta account sync me empty/non-JSON Graph response ab raw parser crash ke bajay readable `MetaAPIError` ban kar dikhega.
   - Facebook direct binary upload ab local cached media file ko stream karta hai, large video ke liye unnecessary memory spike kam hota hai.
+2026-05-22
+- Multi Meta token safe sync implement hua. Ab multiple Meta tokens save ho sakte hain, sabke new pages/accounts same dashboard window me dikhte hain, aur cross-token duplicate page/account existing configured target ko overwrite ya move nahi karta.
+- Sync result message me ab `created`, `reused`, `skipped`, aur `missing` counts clearly dikhte hain. `skipped` ka matlab page/account pehle se kisi saved token ke under configured hai.
+- Dashboard target rows par ab token ownership label dikh raha hai, taaki clear ho ki kaunsa page/account kis saved Meta token se publish karega.
+- Safe Meta-policy readiness warnings ko expand kiya gaya: Instagram unsupported video type aur filename-like default caption jaise issues dashboard health me advisory warning ke roop me dikhte hain, bina existing publish behavior ko unnecessarily strict banaye.
+- Regression tests add/update hue for second-token new page creation, cross-token duplicate skip, FB-only duplicate skip, sync skipped count, dashboard token labels, aur readiness warnings.

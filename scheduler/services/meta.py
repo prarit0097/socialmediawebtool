@@ -137,13 +137,21 @@ def _target_lookup_conditions(facebook_id: str = "", instagram_id: str = "") -> 
     return conditions
 
 
-def _find_existing_target(facebook_id: str = "", instagram_id: str = "") -> PublishingTarget | None:
+def _find_existing_target(
+    facebook_id: str = "",
+    instagram_id: str = "",
+    credential: MetaCredential | None = None,
+) -> PublishingTarget | None:
     conditions = _target_lookup_conditions(facebook_id=facebook_id, instagram_id=instagram_id)
     if not conditions:
         return None
 
+    queryset = PublishingTarget.objects.filter(conditions)
+    if credential is not None:
+        queryset = queryset.filter(credential=credential)
+
     candidates = list(
-        PublishingTarget.objects.filter(conditions)
+        queryset
         .select_related("facebook_account", "instagram_account")
         .distinct()
     )
@@ -167,7 +175,7 @@ def _retire_duplicate_targets(target: PublishingTarget, facebook_id: str = "", i
     conditions = _target_lookup_conditions(facebook_id=facebook_id, instagram_id=instagram_id)
     if not conditions:
         return
-    duplicates = PublishingTarget.objects.filter(conditions).exclude(pk=target.pk).distinct()
+    duplicates = PublishingTarget.objects.filter(credential=target.credential).filter(conditions).exclude(pk=target.pk).distinct()
     for duplicate in duplicates:
         duplicate.is_active = False
         duplicate.last_error = f"Merged into target {target.pk} during Meta sync. Existing settings were preserved on this row."
@@ -218,11 +226,11 @@ def _get_or_create_target(
     display_name: str,
     facebook_account: SocialAccount | None = None,
     instagram_account: SocialAccount | None = None,
-) -> tuple[PublishingTarget, bool]:
+) -> tuple[PublishingTarget | None, bool, bool]:
     facebook_id = facebook_account.external_id if facebook_account else ""
     instagram_id = instagram_account.external_id if instagram_account else ""
     sync_key = _build_sync_key(facebook_id=facebook_id, instagram_id=instagram_id)
-    target = _find_existing_target(facebook_id=facebook_id, instagram_id=instagram_id)
+    target = _find_existing_target(facebook_id=facebook_id, instagram_id=instagram_id, credential=credential)
     if target:
         _apply_target_links(
             target,
@@ -232,7 +240,11 @@ def _get_or_create_target(
             instagram_account=instagram_account,
             sync_key=sync_key,
         )
-        return target, False
+        return target, False, False
+
+    target = _find_existing_target(facebook_id=facebook_id, instagram_id=instagram_id)
+    if target and target.credential_id != credential.id:
+        return None, False, True
 
     return (
         PublishingTarget.objects.create(
@@ -243,6 +255,7 @@ def _get_or_create_target(
             instagram_account=instagram_account,
         ),
         True,
+        False,
     )
 
 
@@ -266,6 +279,7 @@ def sync_credential_accounts(credential: MetaCredential) -> dict[str, int]:
     linked_ig_ids = set()
     created_count = 0
     reused_count = 0
+    skipped_count = 0
 
     for page in assets.pages:
         fb_account, _ = SocialAccount.objects.update_or_create(
@@ -298,12 +312,15 @@ def sync_credential_accounts(credential: MetaCredential) -> dict[str, int]:
             )
 
         display_name = f"{fb_account.display_name} + {ig_account.display_name}" if ig_account else fb_account.display_name
-        target, created = _get_or_create_target(
+        target, created, skipped = _get_or_create_target(
             credential=credential,
             display_name=display_name,
             facebook_account=fb_account,
             instagram_account=ig_account,
         )
+        if skipped:
+            skipped_count += 1
+            continue
         created_count += 1 if created else 0
         reused_count += 0 if created else 1
         seen_target_ids.add(target.pk)
@@ -322,11 +339,14 @@ def sync_credential_accounts(credential: MetaCredential) -> dict[str, int]:
         )
         if ig_account.external_id in linked_ig_ids:
             continue
-        target, created = _get_or_create_target(
+        target, created, skipped = _get_or_create_target(
             credential=credential,
             display_name=ig_account.display_name,
             instagram_account=ig_account,
         )
+        if skipped:
+            skipped_count += 1
+            continue
         created_count += 1 if created else 0
         reused_count += 0 if created else 1
         seen_target_ids.add(target.pk)
@@ -337,4 +357,4 @@ def sync_credential_accounts(credential: MetaCredential) -> dict[str, int]:
         last_error="Target not returned in latest Meta sync. Existing scheduling settings were preserved.",
         updated_at=timezone.now(),
     )
-    return {"created": created_count, "reused": reused_count, "missing": missing_count}
+    return {"created": created_count, "reused": reused_count, "skipped": skipped_count, "missing": missing_count}

@@ -4,6 +4,7 @@ A Django-based web application for automated posting from Google Drive to Facebo
 
 ## What This Project Does
 - accepts a Meta access token from the web UI
+- supports multiple saved Meta tokens while keeping each configured target's token ownership stable
 - syncs connected Facebook Pages and Instagram accounts
 - lets you map a Google Drive folder to each posting target
 - supports daily posting frequency with exact per-post timings
@@ -12,6 +13,7 @@ A Django-based web application for automated posting from Google Drive to Facebo
 
 ## Main Features
 - Meta credential management from the dashboard
+- safe multi-token sync that skips already-configured pages/accounts instead of overwriting existing target settings
 - connected vs unconnected FB/IG target grouping
 - Google Drive folder mapping per target
 - caption support through `caption.txt` or a default caption

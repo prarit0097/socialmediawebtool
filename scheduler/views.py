@@ -23,6 +23,15 @@ from .services.proxy import unsign_media_token
 from .services.telegram import send_daily_report
 
 
+def _sync_status_message(prefix: str, result: dict[str, int]) -> str:
+    return (
+        f"{prefix} Existing settings preserved for {result['reused']} target(s); "
+        f"{result['created']} new target(s) added; "
+        f"{result.get('skipped', 0)} already-configured duplicate(s) skipped; "
+        f"{result.get('missing', 0)} missing target(s) preserved."
+    )
+
+
 def _run_test_post_async(target_id: int) -> None:
     close_old_connections()
     try:
@@ -47,11 +56,7 @@ def dashboard(request):
                     result = sync_credential_accounts(credential)
                     messages.success(
                         request,
-                        (
-                            "Meta token saved and accounts synced. "
-                            f"Existing settings preserved for {result['reused']} target(s); "
-                            f"{result['created']} new target(s) added."
-                        ),
+                        _sync_status_message("Meta token saved and accounts synced.", result),
                     )
                 except MetaAPIError as exc:
                     messages.error(request, f"Token saved, but sync failed: {exc}")
@@ -62,10 +67,7 @@ def dashboard(request):
                 result = sync_credential_accounts(credential)
                 messages.success(
                     request,
-                    (
-                        f"{credential.label} synced. Existing settings preserved for "
-                        f"{result['reused']} target(s); {result['created']} new target(s) added."
-                    ),
+                    _sync_status_message(f"{credential.label} synced.", result),
                 )
             except MetaAPIError as exc:
                 messages.error(request, f"Sync failed: {exc}")

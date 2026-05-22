@@ -75,7 +75,7 @@ class MetaSyncPreservationTest(TestCase):
             me=me or {"id": "user-new", "name": "New Meta User"},
         )
 
-    def test_sync_reuses_existing_pair_and_preserves_scheduling_settings(self):
+    def test_sync_skips_existing_pair_under_new_credential_and_preserves_settings(self):
         from unittest.mock import patch
         from .services.meta import sync_credential_accounts
 
@@ -125,8 +125,9 @@ class MetaSyncPreservationTest(TestCase):
         target.refresh_from_db()
         self.assertEqual(PublishingTarget.objects.count(), 1)
         self.assertEqual(result["created"], 0)
-        self.assertEqual(result["reused"], 1)
-        self.assertEqual(target.credential, new_credential)
+        self.assertEqual(result["reused"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(target.credential, old_credential)
         self.assertEqual(target.drive_folder_id, "drive-folder")
         self.assertEqual(target.drive_folder_url, "https://drive.google.com/drive/folders/drive-folder")
         self.assertEqual(target.posts_per_day, 3)
@@ -139,7 +140,7 @@ class MetaSyncPreservationTest(TestCase):
         self.assertTrue(target.is_active)
         self.assertEqual(target.last_status, "success")
         self.assertEqual(target.post_logs.count(), 1)
-        self.assertEqual(target.facebook_account.access_token, "new-page-token")
+        self.assertEqual(target.facebook_account.access_token, "")
         self.assertEqual(target.instagram_account.external_id, "ig-1")
 
     def test_sync_upgrades_existing_facebook_only_target_to_pair_without_losing_settings(self):
@@ -208,12 +209,88 @@ class MetaSyncPreservationTest(TestCase):
         )
 
         with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
-            sync_credential_accounts(new_credential)
+            result = sync_credential_accounts(new_credential)
 
         self.assertEqual(PublishingTarget.objects.count(), 1)
         target = PublishingTarget.objects.get()
-        self.assertEqual(target.credential, new_credential)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["reused"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(target.credential, old_credential)
         self.assertEqual(target.drive_folder_id, "folder-3")
+
+    def test_sync_second_token_with_new_page_adds_target_without_touching_existing_targets(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        old_credential = MetaCredential.objects.create(label="Old Token", access_token="old-token")
+        old_fb = old_credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-old", name="Old Page")
+        old_target = PublishingTarget.objects.create(
+            credential=old_credential,
+            sync_key="fb:fb-old",
+            display_name="Old Page",
+            facebook_account=old_fb,
+            drive_folder_id="old-folder",
+            posting_times=["09:00", "18:00"],
+            posts_per_day=2,
+        )
+        new_credential = MetaCredential.objects.create(label="New Token", access_token="new-token")
+        assets = self._asset_bundle(
+            pages=[
+                {
+                    "id": "fb-new-token",
+                    "name": "New Token Page",
+                    "access_token": "new-page-token",
+                }
+            ]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            result = sync_credential_accounts(new_credential)
+
+        old_target.refresh_from_db()
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["reused"], 0)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(PublishingTarget.objects.count(), 2)
+        self.assertEqual(old_target.credential, old_credential)
+        self.assertEqual(old_target.drive_folder_id, "old-folder")
+        self.assertTrue(PublishingTarget.objects.filter(credential=new_credential, sync_key="fb:fb-new-token").exists())
+
+    def test_sync_second_token_with_existing_facebook_only_page_is_skipped(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        old_credential = MetaCredential.objects.create(label="Old", access_token="old-token")
+        old_fb = old_credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-only", name="FB Only")
+        target = PublishingTarget.objects.create(
+            credential=old_credential,
+            sync_key="fb:fb-only",
+            display_name="FB Only",
+            facebook_account=old_fb,
+            drive_folder_id="configured-folder",
+        )
+        new_credential = MetaCredential.objects.create(label="New", access_token="new-token")
+        assets = self._asset_bundle(
+            pages=[
+                {
+                    "id": "fb-only",
+                    "name": "FB Only From New Token",
+                    "access_token": "new-page-token",
+                }
+            ]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            result = sync_credential_accounts(new_credential)
+
+        target.refresh_from_db()
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["reused"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(PublishingTarget.objects.count(), 1)
+        self.assertEqual(target.credential, old_credential)
+        self.assertEqual(target.drive_folder_id, "configured-folder")
 
     def test_sync_retires_empty_duplicate_when_configured_target_becomes_pair(self):
         from unittest.mock import patch
@@ -424,6 +501,34 @@ class AdminAuthGateTest(TestCase):
         credentials = base64.b64encode(b"admin:secret").decode("ascii")
         response = self.client.get(reverse("scheduler:dashboard"), HTTP_AUTHORIZATION=f"Basic {credentials}")
         self.assertEqual(response.status_code, 200)
+
+
+class DashboardTargetListTest(TestCase):
+    def test_dashboard_shows_targets_from_multiple_tokens_with_credential_labels(self):
+        credential_a = MetaCredential.objects.create(label="Token A", access_token="token-a")
+        credential_b = MetaCredential.objects.create(label="Token B", access_token="token-b")
+        fb_a = credential_a.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-a", name="Page A")
+        fb_b = credential_b.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-b", name="Page B")
+        PublishingTarget.objects.create(
+            credential=credential_a,
+            sync_key="fb:fb-a",
+            display_name="Page A",
+            facebook_account=fb_a,
+        )
+        PublishingTarget.objects.create(
+            credential=credential_b,
+            sync_key="fb:fb-b",
+            display_name="Page B",
+            facebook_account=fb_b,
+        )
+
+        response = self.client.get(reverse("scheduler:dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Page A")
+        self.assertContains(response, "Page B")
+        self.assertContains(response, "Token: Token A")
+        self.assertContains(response, "Token: Token B")
 
 
 class DiagnosticsTest(TestCase):
@@ -1117,6 +1222,28 @@ class HealthTest(TestCase):
         target = PublishingTarget.objects.create(credential=credential, sync_key="fb:hostwarn", display_name="Host Warn")
         health = build_target_health(target)
         self.assertIn("temporary tunnel host", " | ".join(health["issues"]))
+
+    def test_health_reports_instagram_video_and_filename_caption_readiness_warnings(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-health", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:health",
+            display_name="IG Health",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="POST1",
+        )
+        files = [{"id": "1", "name": "POST1.avi", "mimeType": "video/x-msvideo"}]
+
+        with patch("scheduler.services.health.list_folder_files", return_value=files):
+            health = build_target_health(target)
+
+        issues = " | ".join(health["issues"])
+        self.assertIn("unsupported video type", issues)
+        self.assertIn("default caption matches a media filename", issues)
 
 
 class MediaTransformTest(TestCase):

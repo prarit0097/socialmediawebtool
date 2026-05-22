@@ -13,7 +13,11 @@ class Command(BaseCommand):
                 result = sync_credential_accounts(credential)
                 self.stdout.write(
                     self.style.SUCCESS(
-                        f"Synced {credential.label}: reused={result['reused']} created={result['created']} missing={result['missing']}"
+                        (
+                            f"Synced {credential.label}: reused={result['reused']} "
+                            f"created={result['created']} skipped={result.get('skipped', 0)} "
+                            f"missing={result['missing']}"
+                        )
                     )
                 )
             except MetaAPIError as exc:
