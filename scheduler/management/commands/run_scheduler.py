@@ -60,18 +60,23 @@ def _should_send_daily_report(now) -> bool:
 class Command(BaseCommand):
     help = "Continuously poll for due posts and send the daily Telegram report."
 
+    def _write_heartbeat(self, message: str) -> None:
+        self.stdout.write(message)
+        self.stdout.flush()
+
     def handle(self, *args, **options):
         try:
             _acquire_scheduler_lock()
         except RuntimeError as exc:
             self.stderr.write(str(exc))
+            self.stderr.flush()
             return
 
-        self.stdout.write(self.style.SUCCESS("Scheduler started. Press Ctrl+C to stop."))
+        self._write_heartbeat(self.style.SUCCESS("Scheduler started. Press Ctrl+C to stop."))
         while True:
             now = timezone.localtime()
             result = publish_due_targets(reference_time=now)
-            self.stdout.write(
+            self._write_heartbeat(
                 (
                     f"Scheduler heartbeat {result['checked_at']}: "
                     f"checked={result['checked_targets']} success={result['success']} "
@@ -84,4 +89,5 @@ class Command(BaseCommand):
                     send_daily_report()
                 except Exception as exc:
                     self.stderr.write(f"Daily report failed: {exc}")
+                    self.stderr.flush()
             time.sleep(settings.SCHEDULER_POLL_SECONDS)

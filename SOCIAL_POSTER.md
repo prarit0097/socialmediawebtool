@@ -386,3 +386,4 @@ systemctl status socialposter-scheduler.service --no-pager
   - Same-file queue, existing Drive folders, posting times, token ownership, cached media, aur post history unchanged rakhe gaye.
   - Tests 69 tak update hue, covering detailed Meta errors, transient backoff, no duplicate logs during backoff, content exhaustion counts, audit output, dashboard hints, and sync preserving publish errors.
   - VPS production `.env` me HTTPS redirect/admin auth enabled hone par bhi test suite stable rahe, iske liye dashboard/target view tests ko explicit test settings ke saath harden kiya gaya.
+  - Scheduler heartbeat output ko force-flush kiya gaya taaki systemd journal me `Scheduler started` aur periodic `Scheduler heartbeat ...` lines immediately visible hon.
