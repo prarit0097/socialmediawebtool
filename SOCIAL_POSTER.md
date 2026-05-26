@@ -367,3 +367,9 @@ systemctl status socialposter-scheduler.service --no-pager
 - Dashboard target rows par ab token ownership label dikh raha hai, taaki clear ho ki kaunsa page/account kis saved Meta token se publish karega.
 - Safe Meta-policy readiness warnings ko expand kiya gaya: Instagram unsupported video type aur filename-like default caption jaise issues dashboard health me advisory warning ke roop me dikhte hain, bina existing publish behavior ko unnecessarily strict banaye.
 - Regression tests add/update hue for second-token new page creation, cross-token duplicate skip, FB-only duplicate skip, sync skipped count, dashboard token labels, aur readiness warnings.
+2026-05-26
+- VPS investigation me scheduler/web service healthy mile. Root issue scheduling service nahi tha: Riya/Riims jaise targets me Instagram media container create ho raha tha, lekin container status polling (`/{container_id}?fields=status_code,status`) par Meta `Authorization Error` de raha tha.
+- Instagram publish flow me safe fallback add hua: agar container create success ke baad sirf status-poll authorization error aaye, app short wait ke baad direct `media_publish` retry karegi. Normal status polling available ho to wahi use hoti rahegi.
+- Same-file queue behavior preserve hai: Facebook success ke baad Instagram pending ho to app wahi current file retry karegi; next file tabhi pick hogi jab active platforms complete ho jayen.
+- Existing scheduling, Drive folders, posting times, token ownership, cached media, aur post history ko touch nahi kiya gaya.
+- Tests 59 tak update hue, including Instagram status-poll auth fallback and direct-publish retry coverage.

@@ -352,16 +352,75 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
 
             creation = _graph_post(f"/{target.instagram_account.external_id}/media", token, payload)
             container_id = creation.get("id", "")
-            _wait_for_instagram_container(container_id, token)
-            publish = _graph_post(
-                f"/{target.instagram_account.external_id}/media_publish",
-                token,
-                {"creation_id": container_id},
-            )
+            try:
+                _wait_for_instagram_container(container_id, token)
+            except PublishingError as exc:
+                if not _is_instagram_status_poll_auth_error(exc):
+                    raise
+                publish = _publish_instagram_container_with_retry(
+                    target.instagram_account.external_id,
+                    container_id,
+                    token,
+                    wait_error=exc,
+                )
+                return publish.get("id") or container_id
+            publish = _publish_instagram_container(target.instagram_account.external_id, container_id, token)
             return publish.get("id") or container_id
         except PublishingError as exc:
             errors.append(f"{media_url} -> {exc}")
     raise PublishingError("Instagram publish failed for all tested public URLs: " + " | ".join(errors))
+
+
+def _publish_instagram_container(instagram_account_id: str, container_id: str, access_token: str) -> dict:
+    return _graph_post(
+        f"/{instagram_account_id}/media_publish",
+        access_token,
+        {"creation_id": container_id},
+    )
+
+
+def _is_instagram_status_poll_auth_error(exc: PublishingError) -> bool:
+    message = str(exc).lower()
+    return "authorization" in message or "permission" in message or "oauth" in message
+
+
+def _is_instagram_container_not_ready_error(exc: PublishingError) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "not available",
+            "not ready",
+            "not finished",
+            "processing",
+            "not been processed",
+            "media id",
+        )
+    )
+
+
+def _publish_instagram_container_with_retry(
+    instagram_account_id: str,
+    container_id: str,
+    access_token: str,
+    *,
+    wait_error: PublishingError,
+) -> dict:
+    last_publish_error: PublishingError | None = None
+    for _ in range(settings.INSTAGRAM_CONTAINER_MAX_POLLS):
+        time.sleep(settings.INSTAGRAM_CONTAINER_POLL_SECONDS)
+        try:
+            return _publish_instagram_container(instagram_account_id, container_id, access_token)
+        except PublishingError as exc:
+            last_publish_error = exc
+            if not _is_instagram_container_not_ready_error(exc):
+                break
+    if last_publish_error:
+        raise PublishingError(
+            "Instagram status polling failed after container creation, and direct publish fallback also failed. "
+            f"Status poll error: {wait_error}. Publish error: {last_publish_error}"
+        )
+    raise wait_error
 
 
 def _wait_for_instagram_container(container_id: str, access_token: str) -> None:

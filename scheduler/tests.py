@@ -20,7 +20,7 @@ from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.metrics import fetch_facebook_metrics, iter_tool_post_metrics
 from .services.media_transform import build_instagram_ready_image
-from .services.publishing import _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
+from .services.publishing import PublishingError, _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 from .services.telegram import TELEGRAM_MESSAGE_MAX_LENGTH, _split_telegram_message, build_daily_report_message
 
@@ -1287,6 +1287,72 @@ class InstagramPublishTest(TestCase):
         self.assertEqual(result, "publish-1")
         wait_mock.assert_called_once_with("container-1", "page-token")
         self.assertEqual(graph_post_mock.call_count, 2)
+
+    def test_instagram_publish_falls_back_when_container_status_poll_is_unauthorized(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:fallback",
+            display_name="IG Fallback",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file1", "name": "POST16.mp4", "mimeType": "video/mp4"}
+
+        with patch("scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST16.mp4"]), patch(
+            "scheduler.services.publishing._graph_post",
+            side_effect=[{"id": "container-1"}, {"id": "publish-1"}],
+        ) as graph_post_mock, patch(
+            "scheduler.services.publishing._wait_for_instagram_container",
+            side_effect=PublishingError("Authorization Error"),
+        ) as wait_mock, patch("scheduler.services.publishing.time.sleep") as sleep_mock:
+            result = _publish_to_instagram(target, file_obj)
+
+        self.assertEqual(result, "publish-1")
+        wait_mock.assert_called_once_with("container-1", "page-token")
+        sleep_mock.assert_called_once()
+        self.assertEqual(graph_post_mock.call_count, 2)
+        self.assertEqual(graph_post_mock.call_args.args[0], "/ig1/media_publish")
+
+    def test_instagram_publish_retries_direct_publish_when_fallback_container_is_not_ready(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:fallback-retry",
+            display_name="IG Fallback Retry",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file1", "name": "POST17.mp4", "mimeType": "video/mp4"}
+
+        with patch("scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST17.mp4"]), patch(
+            "scheduler.services.publishing._graph_post",
+            side_effect=[
+                {"id": "container-1"},
+                PublishingError("Media ID is not available"),
+                {"id": "publish-1"},
+            ],
+        ) as graph_post_mock, patch(
+            "scheduler.services.publishing._wait_for_instagram_container",
+            side_effect=PublishingError("Authorization Error"),
+        ), patch("scheduler.services.publishing.time.sleep") as sleep_mock:
+            result = _publish_to_instagram(target, file_obj)
+
+        self.assertEqual(result, "publish-1")
+        self.assertEqual(graph_post_mock.call_count, 3)
+        self.assertEqual(sleep_mock.call_count, 2)
 
 
 class FacebookPublishTest(TestCase):
