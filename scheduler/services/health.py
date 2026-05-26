@@ -4,6 +4,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 
 from scheduler.models import PostLog, PublishingTarget
 from scheduler.services.compliance import SUPPORTED_INSTAGRAM_VIDEO_TYPES, build_target_policy_warnings
@@ -12,7 +13,8 @@ from scheduler.services.proxy import is_public_base_ready
 
 
 def _cache_key(target: PublishingTarget) -> str:
-    return f"target-health:{target.pk}:{int(target.updated_at.timestamp())}"
+    latest_log_id = target.post_logs.order_by("-created_at").values_list("id", flat=True).first() or 0
+    return f"target-health:{target.pk}:{int(target.updated_at.timestamp())}:{latest_log_id}"
 
 
 def _caption_matches_filename(caption: str, file_name: str) -> bool:
@@ -31,6 +33,11 @@ def build_target_health(target: PublishingTarget) -> dict:
     file_count = 0
     media_count = 0
     caption_found = False
+    media_files = []
+    current_file = None
+    pending_platforms = []
+    backoff_messages = []
+    content_exhausted = False
 
     if not target.drive_folder_id:
         issues.append("Drive folder not configured.")
@@ -66,6 +73,37 @@ def build_target_health(target: PublishingTarget) -> dict:
                             "Caption readiness warning: default caption matches a media filename. "
                             "Use human-written copy for better quality signals."
                         )
+            active_platforms = []
+            if target.facebook_account_id:
+                active_platforms.append("facebook")
+            if target.instagram_account_id:
+                active_platforms.append("instagram")
+            success_rows = list(
+                target.post_logs.filter(status=PostLog.STATUS_SUCCESS)
+                .exclude(drive_file_id="")
+                .values("drive_file_id", "platform")
+            )
+            success_map = {}
+            for row in success_rows:
+                success_map.setdefault(row["drive_file_id"], set()).add(row["platform"])
+            for file_obj in media_files:
+                succeeded = success_map.get(file_obj["id"], set())
+                if set(active_platforms) and succeeded != set(active_platforms):
+                    current_file = file_obj
+                    pending_platforms = sorted(set(active_platforms) - succeeded)
+                    break
+            if media_files and active_platforms and current_file is None:
+                content_exhausted = True
+                issues.append("All unique media files have already succeeded on every active platform. Add new files to continue posting.")
+            if current_file and pending_platforms:
+                from scheduler.services.publishing import recent_backoff_message
+
+                for platform in pending_platforms:
+                    message = recent_backoff_message(target, platform, current_file["id"])
+                    if message:
+                        backoff_messages.append(f"{platform}: {message}")
+                if backoff_messages:
+                    issues.append("Backoff active: " + " | ".join(backoff_messages))
         except DriveConfigError as exc:
             issues.append(str(exc))
         except Exception as exc:
@@ -83,9 +121,41 @@ def build_target_health(target: PublishingTarget) -> dict:
     issues.extend(build_target_policy_warnings(target))
 
     latest_logs = list(target.post_logs.order_by("-created_at").values("platform", "status", "message", "drive_file_name")[:5])
+    latest_success = (
+        target.post_logs.filter(status=PostLog.STATUS_SUCCESS, published_at__isnull=False)
+        .order_by("-published_at")
+        .values("platform", "drive_file_name", "published_at")
+        .first()
+    )
+    latest_failure = (
+        target.post_logs.filter(status=PostLog.STATUS_FAILED)
+        .order_by("-created_at")
+        .values("platform", "drive_file_name", "message", "created_at")
+        .first()
+    )
     overall = "ready" if not issues else "warning"
     if any(log["status"] == PostLog.STATUS_FAILED for log in latest_logs):
         overall = "warning"
+
+    due_slots = []
+    next_upcoming_slot = None
+    try:
+        from scheduler.services.publishing import _active_platforms, _slot_is_complete, get_daily_slots
+
+        now = timezone.localtime()
+        active_platform_set = set(_active_platforms(target))
+        for slot in get_daily_slots(target, now):
+            if _slot_is_complete(target, slot, active_platform_set):
+                slot_status = "done"
+            elif slot <= now:
+                slot_status = "due"
+            else:
+                slot_status = "upcoming"
+                if next_upcoming_slot is None:
+                    next_upcoming_slot = slot
+            due_slots.append({"slot": slot, "status": slot_status})
+    except Exception:
+        due_slots = []
 
     health = {
         "overall": overall,
@@ -95,6 +165,16 @@ def build_target_health(target: PublishingTarget) -> dict:
         "caption_found": caption_found,
         "cached_asset_count": getattr(target, "ready_media_asset_count", target.media_assets.filter(status="ready").count()),
         "latest_logs": latest_logs,
+        "latest_success": latest_success,
+        "latest_failure": latest_failure,
+        "active_platforms": [platform for platform in ("facebook", "instagram") if getattr(target, f"{platform}_account_id", None)],
+        "current_file": current_file,
+        "pending_platforms": pending_platforms,
+        "backoff_messages": backoff_messages,
+        "content_exhausted": content_exhausted,
+        "public_base_ready": is_public_base_ready(),
+        "due_slots": due_slots,
+        "next_upcoming_slot": next_upcoming_slot,
     }
     cache.set(cache_key, health, settings.HEALTH_CACHE_TTL_SECONDS)
     return health

@@ -70,7 +70,15 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Scheduler started. Press Ctrl+C to stop."))
         while True:
             now = timezone.localtime()
-            publish_due_targets(reference_time=now)
+            result = publish_due_targets(reference_time=now)
+            self.stdout.write(
+                (
+                    f"Scheduler heartbeat {result['checked_at']}: "
+                    f"checked={result['checked_targets']} success={result['success']} "
+                    f"failed={result['failed']} skipped={result['skipped']} "
+                    f"backoff={result['backoff']} content_exhausted={result['content_exhausted']}"
+                )
+            )
             if _should_send_daily_report(now):
                 try:
                     send_daily_report()

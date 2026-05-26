@@ -28,11 +28,33 @@ class PublishingError(Exception):
     pass
 
 
+class PublishBackoff(PublishingError):
+    pass
+
+
 RATE_LIMIT_MARKERS = (
     "application request limit reached",
     "rate limit",
     "too many calls",
     "calls to this api have exceeded",
+)
+TRANSIENT_BACKOFF_MARKERS = (
+    "authorization error",
+    "media id is not available",
+    "not available",
+    "not ready",
+    "not finished",
+    "processing",
+    "processing timed out",
+    "meta request failed after retries",
+    "binary upload failed",
+    "timeout",
+    "temporarily unavailable",
+    "instagram status polling failed after container creation",
+)
+CONTENT_EXHAUSTED_MARKERS = (
+    "all unique media files",
+    "no publishable image or video files",
 )
 
 
@@ -56,7 +78,52 @@ def _is_meta_rate_limit_error(message: str) -> bool:
     return any(marker in text for marker in RATE_LIMIT_MARKERS)
 
 
-def _recent_rate_limit_message(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
+def _is_transient_backoff_error(message: str) -> bool:
+    text = (message or "").lower()
+    return any(marker in text for marker in TRANSIENT_BACKOFF_MARKERS)
+
+
+def _is_content_exhausted_error(message: str) -> bool:
+    text = (message or "").lower()
+    return any(marker in text for marker in CONTENT_EXHAUSTED_MARKERS)
+
+
+def _format_graph_error(data: dict, fallback_text: str = "") -> str:
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return fallback_text
+
+    parts = [str(error.get("message") or fallback_text or "Meta Graph API error").strip()]
+    detail_parts = []
+    for label, key in (
+        ("type", "type"),
+        ("code", "code"),
+        ("subcode", "error_subcode"),
+        ("trace", "fbtrace_id"),
+    ):
+        value = error.get(key)
+        if value not in (None, ""):
+            detail_parts.append(f"{label}={value}")
+    if detail_parts:
+        parts.append(f"Meta error details: {', '.join(detail_parts)}")
+    return " | ".join(part for part in parts if part)
+
+
+def _backoff_message_for_failure(message: str) -> str:
+    if _is_meta_rate_limit_error(message):
+        return (
+            "Meta rate limit backoff active for this target/platform/file. "
+            f"Skipping publish retry for up to {settings.META_RATE_LIMIT_BACKOFF_MINUTES} minutes after the latest rate-limit response."
+        )
+    if _is_transient_backoff_error(message):
+        return (
+            "Meta transient backoff active for this target/platform/file. "
+            f"Skipping publish retry for up to {settings.META_RATE_LIMIT_BACKOFF_MINUTES} minutes after the latest transient Meta failure."
+        )
+    return ""
+
+
+def recent_backoff_message(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
     if not drive_file_id:
         return ""
     since = timezone.now() - timedelta(minutes=settings.META_RATE_LIMIT_BACKOFF_MINUTES)
@@ -72,11 +139,9 @@ def _recent_rate_limit_message(target: PublishingTarget, platform: str, drive_fi
         .values_list("message", flat=True)[:10]
     )
     for message in recent_messages:
-        if _is_meta_rate_limit_error(message):
-            return (
-                "Meta rate limit backoff active for this target/platform/file. "
-                f"Skipping publish retry for up to {settings.META_RATE_LIMIT_BACKOFF_MINUTES} minutes after the latest rate-limit response."
-            )
+        backoff_message = _backoff_message_for_failure(message)
+        if backoff_message:
+            return backoff_message
     return ""
 
 
@@ -101,7 +166,7 @@ def _graph_post(path: str, access_token: str, payload: dict) -> dict:
     )
     data = _parse_graph_response(response)
     if response.status_code >= 400 or data.get("error"):
-        message = data.get("error", {}).get("message", response.text)
+        message = _format_graph_error(data, response.text)
         raise PublishingError(message)
     return data
 
@@ -127,7 +192,7 @@ def _graph_post_multipart(path: str, access_token: str, payload: dict,
         raise PublishingError(f"Binary upload failed: {exc}")
     data = _parse_graph_response(response)
     if response.status_code >= 400 or data.get("error"):
-        message = data.get("error", {}).get("message", response.text)
+        message = _format_graph_error(data, response.text)
         raise PublishingError(message)
     return data
 
@@ -143,7 +208,7 @@ def _graph_get(path: str, access_token: str, params: dict | None = None) -> dict
     )
     data = _parse_graph_response(response)
     if response.status_code >= 400 or data.get("error"):
-        message = data.get("error", {}).get("message", response.text)
+        message = _format_graph_error(data, response.text)
         raise PublishingError(message)
     return data
 
@@ -481,9 +546,9 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
     file_obj = file_obj or _get_slot_locked_file(target, scheduled_for)
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
         return
-    rate_limit_message = _recent_rate_limit_message(target, platform, file_obj["id"])
-    if rate_limit_message:
-        raise PublishingError(rate_limit_message)
+    backoff_message = recent_backoff_message(target, platform, file_obj["id"])
+    if backoff_message:
+        raise PublishBackoff(backoff_message)
     caption = build_caption(target, file_obj=file_obj)
     compliance = evaluate_publish_readiness(target, platform, file_obj, caption)
     if compliance.is_blocked:
@@ -514,6 +579,7 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
 def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
     scheduled_for = scheduled_for or timezone.now()
     failures = []
+    backoffs = []
     attempted = 0
     file_obj = _get_slot_locked_file(target, scheduled_for)
     for platform in _active_platforms(target):
@@ -522,6 +588,8 @@ def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
         try:
             publish_platform(target, platform, scheduled_for=scheduled_for, file_obj=file_obj)
             attempted += 1
+        except PublishBackoff as exc:
+            backoffs.append(f"{platform}: {exc}")
         except Exception as exc:
             failures.append(f"{platform}: {exc}")
 
@@ -530,6 +598,12 @@ def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
         target.last_error = " | ".join(failures)
         target.save(update_fields=["last_status", "last_error", "updated_at"])
         raise PublishingError(target.last_error)
+
+    if backoffs:
+        target.last_status = "backoff"
+        target.last_error = " | ".join(backoffs)
+        target.save(update_fields=["last_status", "last_error", "updated_at"])
+        raise PublishBackoff(target.last_error)
 
     if attempted == 0:
         return
@@ -553,10 +627,16 @@ def publish_due_targets(reference_time=None) -> dict:
     catchup_window = timedelta(minutes=settings.SCHEDULER_CATCHUP_MINUTES)
     success = 0
     failed = 0
+    skipped = 0
+    backoff = 0
+    content_exhausted = 0
+    checked_targets = 0
     targets = PublishingTarget.objects.filter(is_active=True).select_related("credential", "facebook_account", "instagram_account")
     for target in targets:
+        checked_targets += 1
         try:
             if not target.drive_folder_id:
+                skipped += 1
                 continue
             due_slots = [
                 slot
@@ -578,9 +658,28 @@ def publish_due_targets(reference_time=None) -> dict:
                 published_any = True
             if published_any:
                 success += 1
-        except (PublishingError, DriveConfigError, requests.RequestException) as exc:
-            target.last_status = "failed"
+        except PublishBackoff as exc:
+            target.last_status = "backoff"
             target.last_error = str(exc)
             target.save(update_fields=["last_status", "last_error", "updated_at"])
-            failed += 1
-    return {"success": success, "failed": failed, "checked_at": now}
+            skipped += 1
+            backoff += 1
+        except (PublishingError, DriveConfigError, requests.RequestException) as exc:
+            if _is_content_exhausted_error(str(exc)):
+                target.last_status = "content_exhausted"
+                skipped += 1
+                content_exhausted += 1
+            else:
+                target.last_status = "failed"
+                failed += 1
+            target.last_error = str(exc)
+            target.save(update_fields=["last_status", "last_error", "updated_at"])
+    return {
+        "success": success,
+        "failed": failed,
+        "skipped": skipped,
+        "backoff": backoff,
+        "content_exhausted": content_exhausted,
+        "checked_targets": checked_targets,
+        "checked_at": now,
+    }

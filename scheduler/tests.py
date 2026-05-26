@@ -1,6 +1,6 @@
 import base64
 from datetime import datetime, time
-from io import BytesIO
+from io import BytesIO, StringIO
 import tempfile
 
 from PIL import Image
@@ -63,6 +63,34 @@ class MetaAPIClientTest(TestCase):
         with patch("scheduler.services.meta.requests.get", return_value=response):
             with self.assertRaisesMessage(MetaAPIError, "non-JSON response"):
                 _graph_get("/me", "token")
+
+    def test_graph_get_reports_meta_error_details(self):
+        from unittest.mock import MagicMock, patch
+        from .services.meta import MetaAPIError, _graph_get
+
+        response = MagicMock()
+        response.status_code = 400
+        response.text = '{"error": "..."}'
+        response.json.return_value = {
+            "error": {
+                "message": "Application request limit reached",
+                "type": "OAuthException",
+                "code": 4,
+                "error_subcode": 2207008,
+                "fbtrace_id": "TRACE123",
+            }
+        }
+
+        with patch("scheduler.services.meta.requests.get", return_value=response):
+            with self.assertRaises(MetaAPIError) as ctx:
+                _graph_get("/me", "token")
+
+        message = str(ctx.exception)
+        self.assertIn("Application request limit reached", message)
+        self.assertIn("type=OAuthException", message)
+        self.assertIn("code=4", message)
+        self.assertIn("subcode=2207008", message)
+        self.assertIn("trace=TRACE123", message)
 
 
 class MetaSyncPreservationTest(TestCase):
@@ -392,6 +420,31 @@ class MetaSyncPreservationTest(TestCase):
         self.assertEqual(target.drive_folder_id, "")
         self.assertEqual(target.posts_per_day, 1)
 
+    def test_sync_does_not_clear_existing_publish_failure_context(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        credential = MetaCredential.objects.create(label="Token", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-keep-error", name="FB")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-keep-error",
+            display_name="Keep Error",
+            facebook_account=fb,
+            last_status="failed",
+            last_error="instagram: Meta transient backoff active for this target/platform/file.",
+        )
+        assets = self._asset_bundle(
+            pages=[{"id": "fb-keep-error", "name": "FB", "access_token": "page-token"}]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            sync_credential_accounts(credential)
+
+        target.refresh_from_db()
+        self.assertEqual(target.last_status, "failed")
+        self.assertIn("Meta transient backoff", target.last_error)
+
 
 class SchedulingTest(TestCase):
     def test_daily_slots_count_matches_posts_per_day(self):
@@ -467,6 +520,74 @@ class SchedulingTest(TestCase):
         publish_target_mock.assert_not_called()
         self.assertEqual(result["success"], 0)
 
+    @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90)
+    def test_due_runner_counts_backoff_as_skipped_without_duplicate_log(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-backoff", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:due-backoff",
+            display_name="Due Backoff",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+        )
+        file_obj = {"id": "file-backoff", "name": "POST1.mp4", "mimeType": "video/mp4"}
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.make_aware(datetime(2026, 3, 22, 9, 0)),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id=file_obj["id"],
+            drive_file_name=file_obj["name"],
+            message="Instagram publish failed: Authorization Error",
+        )
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file_obj]), patch(
+            "scheduler.services.publishing._publish_to_instagram"
+        ) as publish_mock:
+            result = publish_due_targets(reference_time=timezone.make_aware(datetime(2026, 3, 22, 9, 30)))
+
+        publish_mock.assert_not_called()
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(result["backoff"], 1)
+        self.assertEqual(target.post_logs.count(), 1)
+        target.refresh_from_db()
+        self.assertEqual(target.last_status, "backoff")
+
+    def test_due_runner_counts_content_exhausted_as_skipped(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-exhausted", name="FB", access_token="page-token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:exhausted",
+            display_name="Exhausted",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+        )
+        file_obj = {"id": "file-done", "name": "POST1.jpeg", "mimeType": "image/jpeg"}
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=timezone.make_aware(datetime(2026, 3, 21, 9, 0)),
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id=file_obj["id"],
+            drive_file_name=file_obj["name"],
+        )
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file_obj]):
+            result = publish_due_targets(reference_time=timezone.make_aware(datetime(2026, 3, 22, 9, 30)))
+
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(result["content_exhausted"], 1)
+        target.refresh_from_db()
+        self.assertEqual(target.last_status, "content_exhausted")
+
 
 class ProxyHelpersTest(TestCase):
     @override_settings(PUBLIC_APP_BASE_URL="https://example.com")
@@ -529,6 +650,35 @@ class DashboardTargetListTest(TestCase):
         self.assertContains(response, "Page B")
         self.assertContains(response, "Token: Token A")
         self.assertContains(response, "Token: Token B")
+
+    def test_dashboard_renders_queue_backoff_and_content_hints(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Token A", access_token="token-a")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-a", name="IG A")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:dashboard",
+            display_name="Dashboard Queue",
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id="file-1",
+            drive_file_name="POST1.mp4",
+            message="Instagram publish failed: Authorization Error",
+        )
+
+        with patch("scheduler.services.health.list_folder_files", return_value=[{"id": "file-1", "name": "POST1.mp4", "mimeType": "video/mp4"}]):
+            response = self.client.get(reverse("scheduler:dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Current: POST1.mp4")
+        self.assertContains(response, "Pending: instagram")
+        self.assertContains(response, "Backoff active")
 
 
 class DiagnosticsTest(TestCase):
@@ -1245,6 +1395,69 @@ class HealthTest(TestCase):
         self.assertIn("unsupported video type", issues)
         self.assertIn("default caption matches a media filename", issues)
 
+    @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90)
+    def test_health_reports_current_file_pending_platform_and_backoff(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-health-backoff", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:health-backoff",
+            display_name="IG Health Backoff",
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        file_obj = {"id": "file-1", "name": "POST1.mp4", "mimeType": "video/mp4"}
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id="file-1",
+            drive_file_name="POST1.mp4",
+            message="Instagram publish failed: Authorization Error",
+        )
+
+        with patch("scheduler.services.health.list_folder_files", return_value=[file_obj]):
+            health = build_target_health(target)
+
+        self.assertEqual(health["current_file"]["name"], "POST1.mp4")
+        self.assertEqual(health["pending_platforms"], ["instagram"])
+        self.assertTrue(health["backoff_messages"])
+        self.assertIn("Backoff active", " | ".join(health["issues"]))
+
+    def test_audit_publish_readiness_prints_operational_state(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Token Audit", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-audit", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:audit",
+            display_name="Audit Target",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+        )
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id="file-1",
+            drive_file_name="POST1.mp4",
+            message="Instagram publish failed: Authorization Error",
+        )
+        output = StringIO()
+
+        with patch("scheduler.services.health.list_folder_files", return_value=[{"id": "file-1", "name": "POST1.mp4", "mimeType": "video/mp4"}]):
+            call_command("audit_publish_readiness", stdout=output)
+
+        text = output.getvalue()
+        self.assertIn("token: Token Audit", text)
+        self.assertIn("current_file: POST1.mp4", text)
+        self.assertIn("pending_platforms: instagram", text)
+        self.assertIn("backoff:", text)
+
 
 class MediaTransformTest(TestCase):
     def test_instagram_ready_image_returns_small_jpeg(self):
@@ -1261,6 +1474,34 @@ class MediaTransformTest(TestCase):
 
 
 class InstagramPublishTest(TestCase):
+    def test_publishing_graph_get_reports_meta_error_details(self):
+        from unittest.mock import MagicMock, patch
+        from .services.publishing import _graph_get
+
+        response = MagicMock()
+        response.status_code = 400
+        response.text = '{"error": "..."}'
+        response.json.return_value = {
+            "error": {
+                "message": "Application request limit reached",
+                "type": "OAuthException",
+                "code": 4,
+                "error_subcode": 2207008,
+                "fbtrace_id": "TRACE123",
+            }
+        }
+
+        with patch("scheduler.services.publishing._request_with_retries", return_value=response):
+            with self.assertRaises(PublishingError) as ctx:
+                _graph_get("/container", "token")
+
+        message = str(ctx.exception)
+        self.assertIn("Application request limit reached", message)
+        self.assertIn("type=OAuthException", message)
+        self.assertIn("code=4", message)
+        self.assertIn("subcode=2207008", message)
+        self.assertIn("trace=TRACE123", message)
+
     def test_instagram_image_waits_for_container_before_publish(self):
         from unittest.mock import patch
 
@@ -1436,6 +1677,32 @@ class PostingTimesFormTest(TestCase):
         )
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["posting_times"], ["09:00", "12:00", "18:00"])
+
+
+class RunDuePostsCommandTest(TestCase):
+    def test_run_due_posts_reports_skip_backoff_counts(self):
+        from unittest.mock import patch
+
+        output = StringIO()
+        with patch(
+            "scheduler.management.commands.run_due_posts.publish_due_targets",
+            return_value={
+                "checked_at": timezone.now(),
+                "checked_targets": 3,
+                "success": 1,
+                "failed": 0,
+                "skipped": 2,
+                "backoff": 1,
+                "content_exhausted": 1,
+            },
+        ):
+            call_command("run_due_posts", stdout=output)
+
+        text = output.getvalue()
+        self.assertIn("Checked=3", text)
+        self.assertIn("Skipped=2", text)
+        self.assertIn("Backoff=1", text)
+        self.assertIn("ContentExhausted=1", text)
 
 
 class MetricsExportTest(TestCase):

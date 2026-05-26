@@ -376,3 +376,12 @@ systemctl status socialposter-scheduler.service --no-pager
 - Meta `Application request limit reached` ke liye backoff guard add hua. Agar kisi target/platform/file par recent rate-limit failure ho, app configured backoff window tak Meta ko baar-baar hit nahi karegi, taaki scheduler repeated API calls se limit ko aur extend na kare.
 - `META_RATE_LIMIT_BACKOFF_MINUTES` env knob add hua, default `90` minutes. Existing queue/progress same rahegi; backoff ke baad same pending file retry hogi.
 - Tests 60 tak update hue, including rate-limit backoff coverage that verifies no extra Meta call or duplicate failure log is created during the backoff.
+- Full reliability hardening pass add hua:
+  - Meta Graph error messages ab sirf generic text nahi dikhate; agar Meta response me `type`, `code`, `subcode`, ya `fbtrace_id` aaye to diagnostics me preserve hote hain.
+  - Backoff guard rate-limit ke saath repeated transient Meta failures par bhi kaam karta hai, jaise status-poll authorization errors, container/media-not-ready responses, timeouts, aur temporary request failures. Iska purpose Meta ko baar-baar hit karke limit badhana nahi hai.
+  - Scheduler result ab `checked`, `success`, `failed`, `skipped`, `backoff`, aur `content_exhausted` counts dikhata hai. `Success=0 Failed=0` jaisi confusing output ke bajay ab skipped reason clear hoga.
+  - `audit_publish_readiness` ab production audit jaisa output deta hai: token owner, active platforms, public URL readiness, Drive/media/cached counts, current queue file, pending platform, daily slots, latest success/failure, backoff state, aur content exhausted state.
+  - Dashboard aur target detail page par current queue file, pending platform, backoff active, content exhausted, aur next slot hints visible hain.
+  - Meta sync ab normal publish failure context ko clear nahi karta. Sirf sync-generated missing/merge warning resolve hone par clear hoti hai, taaki real posting error investigation ke dauran important `last_error` wipe na ho.
+  - Same-file queue, existing Drive folders, posting times, token ownership, cached media, aur post history unchanged rakhe gaye.
+  - Tests 69 tak update hue, covering detailed Meta errors, transient backoff, no duplicate logs during backoff, content exhaustion counts, audit output, dashboard hints, and sync preserving publish errors.

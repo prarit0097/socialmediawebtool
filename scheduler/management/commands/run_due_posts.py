@@ -10,6 +10,11 @@ class Command(BaseCommand):
         result = publish_due_targets()
         self.stdout.write(
             self.style.SUCCESS(
-                f"Posting run completed at {result['checked_at']}. Success={result['success']} Failed={result['failed']}"
+                (
+                    f"Posting run completed at {result['checked_at']}. "
+                    f"Checked={result['checked_targets']} Success={result['success']} "
+                    f"Failed={result['failed']} Skipped={result['skipped']} "
+                    f"Backoff={result['backoff']} ContentExhausted={result['content_exhausted']}"
+                )
             )
         )

@@ -37,6 +37,29 @@
         </div>
     </div>
 
+    <div class="health-grid" style="margin-bottom: 16px;">
+        <div class="health-tile">
+            <strong>Queue</strong>
+            <div class="target-meta" style="margin-top: 8px;">
+                {% if health.current_file %}<span>Current: {{ health.current_file.name }}</span>{% endif %}
+                {% if health.pending_platforms %}<span>Pending: {{ health.pending_platforms|join:", " }}</span>{% endif %}
+                {% if health.content_exhausted %}<span>Content exhausted</span>{% endif %}
+            </div>
+        </div>
+        <div class="health-tile">
+            <strong>Backoff</strong>
+            <div class="target-meta" style="margin-top: 8px;">
+                {% if health.backoff_messages %}<span>active</span>{% else %}<span>none</span>{% endif %}
+            </div>
+        </div>
+        <div class="health-tile">
+            <strong>Next Slot</strong>
+            <div class="target-meta" style="margin-top: 8px;">
+                {% if health.next_upcoming_slot %}<span>{{ health.next_upcoming_slot }}</span>{% else %}<span>-</span>{% endif %}
+            </div>
+        </div>
+    </div>
+
     {% if health.issues %}
         <div class="card" style="padding: 14px; margin-bottom: 16px;">
             <h3 style="margin-bottom: 8px;">Issues</h3>

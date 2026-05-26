@@ -80,7 +80,15 @@ def dashboard(request):
             return redirect("scheduler:dashboard")
         elif action == "run_due_posts":
             result = publish_due_targets()
-            messages.success(request, f"Posting run completed. Success={result['success']} Failed={result['failed']}")
+            messages.success(
+                request,
+                (
+                    "Posting run completed. "
+                    f"Checked={result['checked_targets']} Success={result['success']} "
+                    f"Failed={result['failed']} Skipped={result['skipped']} "
+                    f"Backoff={result['backoff']} Content exhausted={result['content_exhausted']}"
+                ),
+            )
             return redirect("scheduler:dashboard")
         elif action == "send_report":
             report = send_daily_report()

@@ -14,11 +14,38 @@ class MetaAPIError(Exception):
     pass
 
 
+SYNC_WARNING_PREFIXES = (
+    "Target not returned in latest Meta sync.",
+    "Merged into target ",
+)
+
+
 @dataclass
 class AssetBundle:
     pages: list[dict]
     instagram_accounts: list[dict]
     me: dict
+
+
+def _format_graph_error(data: dict, fallback_text: str = "") -> str:
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return fallback_text
+
+    parts = [str(error.get("message") or fallback_text or "Meta Graph API error").strip()]
+    detail_parts = []
+    for label, key in (
+        ("type", "type"),
+        ("code", "code"),
+        ("subcode", "error_subcode"),
+        ("trace", "fbtrace_id"),
+    ):
+        value = error.get(key)
+        if value not in (None, ""):
+            detail_parts.append(f"{label}={value}")
+    if detail_parts:
+        parts.append(f"Meta error details: {', '.join(detail_parts)}")
+    return " | ".join(part for part in parts if part)
 
 
 def _graph_get(path: str, access_token: str, params: dict | None = None) -> dict:
@@ -32,7 +59,7 @@ def _graph_get(path: str, access_token: str, params: dict | None = None) -> dict
         snippet = (response.text or "").strip()[:300] or "<empty response body>"
         raise MetaAPIError(f"Meta returned a non-JSON response (status {response.status_code}): {snippet}")
     if response.status_code >= 400 or data.get("error"):
-        message = data.get("error", {}).get("message", response.text)
+        message = _format_graph_error(data, response.text)
         raise MetaAPIError(message)
     return data
 
@@ -203,16 +230,17 @@ def _apply_target_links(
     target.display_name = display_name
     target.facebook_account = facebook_account
     target.instagram_account = instagram_account
-    target.last_error = ""
 
     update_fields = [
         "credential",
         "display_name",
         "facebook_account",
         "instagram_account",
-        "last_error",
         "updated_at",
     ]
+    if target.last_error and target.last_error.startswith(SYNC_WARNING_PREFIXES):
+        target.last_error = ""
+        update_fields.append("last_error")
     sync_key_conflict = PublishingTarget.objects.filter(sync_key=sync_key).exclude(pk=target.pk).exists()
     if not sync_key_conflict and target.sync_key != sync_key:
         target.sync_key = sync_key
