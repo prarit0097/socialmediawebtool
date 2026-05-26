@@ -385,3 +385,4 @@ systemctl status socialposter-scheduler.service --no-pager
   - Meta sync ab normal publish failure context ko clear nahi karta. Sirf sync-generated missing/merge warning resolve hone par clear hoti hai, taaki real posting error investigation ke dauran important `last_error` wipe na ho.
   - Same-file queue, existing Drive folders, posting times, token ownership, cached media, aur post history unchanged rakhe gaye.
   - Tests 69 tak update hue, covering detailed Meta errors, transient backoff, no duplicate logs during backoff, content exhaustion counts, audit output, dashboard hints, and sync preserving publish errors.
+  - VPS production `.env` me HTTPS redirect/admin auth enabled hone par bhi test suite stable rahe, iske liye dashboard/target view tests ko explicit test settings ke saath harden kiya gaya.

@@ -611,19 +611,20 @@ class ProxyHelpersTest(TestCase):
 
 
 class AdminAuthGateTest(TestCase):
-    @override_settings(DEBUG=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
     def test_dashboard_requires_basic_auth_when_admin_credentials_are_configured(self):
         response = self.client.get(reverse("scheduler:dashboard"))
         self.assertEqual(response.status_code, 401)
         self.assertIn("Basic", response.headers["WWW-Authenticate"])
 
-    @override_settings(DEBUG=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
     def test_dashboard_allows_valid_basic_auth(self):
         credentials = base64.b64encode(b"admin:secret").decode("ascii")
         response = self.client.get(reverse("scheduler:dashboard"), HTTP_AUTHORIZATION=f"Basic {credentials}")
         self.assertEqual(response.status_code, 200)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
 class DashboardTargetListTest(TestCase):
     def test_dashboard_shows_targets_from_multiple_tokens_with_credential_labels(self):
         credential_a = MetaCredential.objects.create(label="Token A", access_token="token-a")
@@ -1090,8 +1091,9 @@ class AIServiceTest(TestCase):
         self.assertNotIn("NEEDS ATTENTION", message)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
 class AIViewFlowTest(TestCase):
-    @override_settings(AI_API_KEY="test-key")
+    @override_settings(AI_API_KEY="test-key", SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
     def test_generate_insight_and_apply_caption_buttons_work(self):
         from unittest.mock import patch
 
