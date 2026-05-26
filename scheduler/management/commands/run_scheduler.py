@@ -63,8 +63,6 @@ class Command(BaseCommand):
     help = "Continuously poll for due posts and send the daily Telegram report."
 
     def _write_heartbeat(self, message: str) -> None:
-        self.stdout.write(message)
-        self.stdout.flush()
         logger.warning(message)
 
     def handle(self, *args, **options):

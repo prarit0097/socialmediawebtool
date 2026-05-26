@@ -388,3 +388,4 @@ systemctl status socialposter-scheduler.service --no-pager
   - VPS production `.env` me HTTPS redirect/admin auth enabled hone par bhi test suite stable rahe, iske liye dashboard/target view tests ko explicit test settings ke saath harden kiya gaya.
   - Scheduler heartbeat output ko force-flush kiya gaya taaki systemd journal me `Scheduler started` aur periodic `Scheduler heartbeat ...` lines immediately visible hon.
   - Scheduler heartbeat ko logging path par bhi bheja gaya, taaki agar systemd stdout capture na kare to stderr/logging ke through journal me operational status visible rahe.
+  - VPS par heartbeat duplicate line aa rahi thi kyunki stdout aur logging dono journal me capture ho rahe the; scheduler heartbeat ko single logging path par rakha gaya.
