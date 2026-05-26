@@ -88,6 +88,22 @@ def _is_content_exhausted_error(message: str) -> bool:
     return any(marker in text for marker in CONTENT_EXHAUSTED_MARKERS)
 
 
+def _app_rate_limit_backoff_minutes() -> int:
+    return getattr(
+        settings,
+        "META_APP_RATE_LIMIT_BACKOFF_MINUTES",
+        settings.META_RATE_LIMIT_BACKOFF_MINUTES,
+    )
+
+
+def _backoff_minutes_for_failure(message: str) -> int:
+    if _is_meta_rate_limit_error(message):
+        return _app_rate_limit_backoff_minutes()
+    if _is_transient_backoff_error(message):
+        return settings.META_RATE_LIMIT_BACKOFF_MINUTES
+    return 0
+
+
 def _format_graph_error(data: dict, fallback_text: str = "") -> str:
     error = data.get("error") if isinstance(data, dict) else None
     if not isinstance(error, dict):
@@ -109,15 +125,15 @@ def _format_graph_error(data: dict, fallback_text: str = "") -> str:
     return " | ".join(part for part in parts if part)
 
 
-def _backoff_message_for_failure(message: str) -> str:
+def _backoff_message_for_failure(message: str, scope: str = "target/platform/file") -> str:
     if _is_meta_rate_limit_error(message):
         return (
-            "Meta rate limit backoff active for this target/platform/file. "
-            f"Skipping publish retry for up to {settings.META_RATE_LIMIT_BACKOFF_MINUTES} minutes after the latest rate-limit response."
+            f"Meta rate limit backoff active for this {scope}. "
+            f"Skipping publish retry for up to {_app_rate_limit_backoff_minutes()} minutes after the latest rate-limit response."
         )
     if _is_transient_backoff_error(message):
         return (
-            "Meta transient backoff active for this target/platform/file. "
+            f"Meta transient backoff active for this {scope}. "
             f"Skipping publish retry for up to {settings.META_RATE_LIMIT_BACKOFF_MINUTES} minutes after the latest transient Meta failure."
         )
     return ""
@@ -126,7 +142,8 @@ def _backoff_message_for_failure(message: str) -> str:
 def recent_backoff_message(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
     if not drive_file_id:
         return ""
-    since = timezone.now() - timedelta(minutes=settings.META_RATE_LIMIT_BACKOFF_MINUTES)
+    now = timezone.now()
+    since = now - timedelta(minutes=max(settings.META_RATE_LIMIT_BACKOFF_MINUTES, _app_rate_limit_backoff_minutes()))
     recent_messages = (
         target.post_logs.filter(
             platform=platform,
@@ -136,12 +153,41 @@ def recent_backoff_message(target: PublishingTarget, platform: str, drive_file_i
         )
         .exclude(message="")
         .order_by("-created_at")
-        .values_list("message", flat=True)[:10]
+        .values_list("message", "created_at")[:10]
     )
-    for message in recent_messages:
+    for message, created_at in recent_messages:
+        backoff_minutes = _backoff_minutes_for_failure(message)
+        if not backoff_minutes or created_at < now - timedelta(minutes=backoff_minutes):
+            continue
         backoff_message = _backoff_message_for_failure(message)
         if backoff_message:
             return backoff_message
+    return ""
+
+
+def recent_credential_backoff_message(target: PublishingTarget, platform: str) -> str:
+    if not target.credential_id:
+        return ""
+    now = timezone.now()
+    since = now - timedelta(minutes=_app_rate_limit_backoff_minutes())
+    recent_messages = (
+        PostLog.objects.filter(
+            target__credential=target.credential,
+            platform=platform,
+            status=PostLog.STATUS_FAILED,
+            created_at__gte=since,
+        )
+        .exclude(message="")
+        .order_by("-created_at")
+        .values_list("message", "created_at")[:20]
+    )
+    for message, created_at in recent_messages:
+        if not _is_meta_rate_limit_error(message):
+            continue
+        backoff_minutes = _backoff_minutes_for_failure(message)
+        if not backoff_minutes or created_at < now - timedelta(minutes=backoff_minutes):
+            continue
+        return _backoff_message_for_failure(message, scope="credential/platform")
     return ""
 
 
@@ -547,6 +593,8 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
         return
     backoff_message = recent_backoff_message(target, platform, file_obj["id"])
+    if not backoff_message:
+        backoff_message = recent_credential_backoff_message(target, platform)
     if backoff_message:
         raise PublishBackoff(backoff_message)
     caption = build_caption(target, file_obj=file_obj)

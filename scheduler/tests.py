@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from io import BytesIO, StringIO
 import tempfile
 
@@ -1629,6 +1629,46 @@ class InstagramPublishTest(TestCase):
 
         publish_mock.assert_not_called()
         self.assertEqual(target.post_logs.filter(drive_file_id=file_obj["id"]).count(), 1)
+
+    @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90, META_APP_RATE_LIMIT_BACKOFF_MINUTES=1440)
+    def test_credential_rate_limit_failure_skips_other_instagram_targets_without_meta_call(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        first_ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-rate-source", name="IG Source")
+        first_target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:rate-source",
+            display_name="Rate Source",
+            instagram_account=first_ig,
+            drive_folder_id="folder-source",
+        )
+        second_ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-rate-blocked", name="IG Blocked")
+        second_target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:rate-blocked",
+            display_name="Rate Blocked",
+            instagram_account=second_ig,
+            drive_folder_id="folder-blocked",
+            default_caption="Caption",
+        )
+        rate_log = first_target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id="source-file",
+            drive_file_name="SOURCE.mp4",
+            message="Instagram publish failed: Application request limit reached | Meta error details: type=OAuthException, code=4, subcode=2207051",
+        )
+        PostLog.objects.filter(pk=rate_log.pk).update(created_at=timezone.now() - timedelta(hours=12))
+        file_obj = {"id": "new-file", "name": "POST19.mp4", "mimeType": "video/mp4"}
+
+        with patch("scheduler.services.publishing._publish_to_instagram") as publish_mock:
+            with self.assertRaisesMessage(PublishingError, "credential/platform"):
+                publish_platform(second_target, SocialAccount.INSTAGRAM, file_obj=file_obj)
+
+        publish_mock.assert_not_called()
+        self.assertFalse(second_target.post_logs.filter(drive_file_id=file_obj["id"]).exists())
 
 
 class FacebookPublishTest(TestCase):

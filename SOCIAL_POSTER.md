@@ -375,6 +375,7 @@ systemctl status socialposter-scheduler.service --no-pager
 - Tests 59 tak update hue, including Instagram status-poll auth fallback and direct-publish retry coverage.
 - Meta `Application request limit reached` ke liye backoff guard add hua. Agar kisi target/platform/file par recent rate-limit failure ho, app configured backoff window tak Meta ko baar-baar hit nahi karegi, taaki scheduler repeated API calls se limit ko aur extend na kare.
 - `META_RATE_LIMIT_BACKOFF_MINUTES` env knob add hua, default `90` minutes. Existing queue/progress same rahegi; backoff ke baad same pending file retry hogi.
+- `META_APP_RATE_LIMIT_BACKOFF_MINUTES` env knob add hua, default `1440` minutes. Meta `Application request limit reached` / code `4` ke baad same credential/platform par publish attempts cooldown me skip honge, taaki scheduler duplicate Meta calls se limit ko aur worsen na kare.
 - Tests 60 tak update hue, including rate-limit backoff coverage that verifies no extra Meta call or duplicate failure log is created during the backoff.
 - Full reliability hardening pass add hua:
   - Meta Graph error messages ab sirf generic text nahi dikhate; agar Meta response me `type`, `code`, `subcode`, ya `fbtrace_id` aaye to diagnostics me preserve hote hain.
