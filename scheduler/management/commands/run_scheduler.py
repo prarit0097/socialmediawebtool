@@ -1,4 +1,5 @@
 import atexit
+import logging
 import os
 import time
 from datetime import timedelta
@@ -14,6 +15,7 @@ from scheduler.services.telegram import send_daily_report
 
 
 LOCK_FILE = Path(settings.BASE_DIR) / ".run_scheduler.lock"
+logger = logging.getLogger(__name__)
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -63,6 +65,7 @@ class Command(BaseCommand):
     def _write_heartbeat(self, message: str) -> None:
         self.stdout.write(message)
         self.stdout.flush()
+        logger.warning(message)
 
     def handle(self, *args, **options):
         try:
