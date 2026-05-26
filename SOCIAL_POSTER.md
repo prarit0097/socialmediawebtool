@@ -373,3 +373,6 @@ systemctl status socialposter-scheduler.service --no-pager
 - Same-file queue behavior preserve hai: Facebook success ke baad Instagram pending ho to app wahi current file retry karegi; next file tabhi pick hogi jab active platforms complete ho jayen.
 - Existing scheduling, Drive folders, posting times, token ownership, cached media, aur post history ko touch nahi kiya gaya.
 - Tests 59 tak update hue, including Instagram status-poll auth fallback and direct-publish retry coverage.
+- Meta `Application request limit reached` ke liye backoff guard add hua. Agar kisi target/platform/file par recent rate-limit failure ho, app configured backoff window tak Meta ko baar-baar hit nahi karegi, taaki scheduler repeated API calls se limit ko aur extend na kare.
+- `META_RATE_LIMIT_BACKOFF_MINUTES` env knob add hua, default `90` minutes. Existing queue/progress same rahegi; backoff ke baad same pending file retry hogi.
+- Tests 60 tak update hue, including rate-limit backoff coverage that verifies no extra Meta call or duplicate failure log is created during the backoff.

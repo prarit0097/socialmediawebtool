@@ -28,6 +28,14 @@ class PublishingError(Exception):
     pass
 
 
+RATE_LIMIT_MARKERS = (
+    "application request limit reached",
+    "rate limit",
+    "too many calls",
+    "calls to this api have exceeded",
+)
+
+
 def _parse_graph_response(response) -> dict:
     try:
         data = response.json()
@@ -41,6 +49,35 @@ def _parse_graph_response(response) -> dict:
             f"Meta returned a non-JSON response (status {response.status_code}): {snippet}"
         )
     return data
+
+
+def _is_meta_rate_limit_error(message: str) -> bool:
+    text = (message or "").lower()
+    return any(marker in text for marker in RATE_LIMIT_MARKERS)
+
+
+def _recent_rate_limit_message(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
+    if not drive_file_id:
+        return ""
+    since = timezone.now() - timedelta(minutes=settings.META_RATE_LIMIT_BACKOFF_MINUTES)
+    recent_messages = (
+        target.post_logs.filter(
+            platform=platform,
+            drive_file_id=drive_file_id,
+            status=PostLog.STATUS_FAILED,
+            created_at__gte=since,
+        )
+        .exclude(message="")
+        .order_by("-created_at")
+        .values_list("message", flat=True)[:10]
+    )
+    for message in recent_messages:
+        if _is_meta_rate_limit_error(message):
+            return (
+                "Meta rate limit backoff active for this target/platform/file. "
+                f"Skipping publish retry for up to {settings.META_RATE_LIMIT_BACKOFF_MINUTES} minutes after the latest rate-limit response."
+            )
+    return ""
 
 
 def _request_with_retries(method: str, url: str, **kwargs):
@@ -444,6 +481,9 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
     file_obj = file_obj or _get_slot_locked_file(target, scheduled_for)
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
         return
+    rate_limit_message = _recent_rate_limit_message(target, platform, file_obj["id"])
+    if rate_limit_message:
+        raise PublishingError(rate_limit_message)
     caption = build_caption(target, file_obj=file_obj)
     compliance = evaluate_publish_readiness(target, platform, file_obj, caption)
     if compliance.is_blocked:

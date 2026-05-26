@@ -12,7 +12,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .forms import PublishingTargetForm
-from .models import MetaCredential, PublishingTarget, SocialAccount
+from .models import MetaCredential, PostLog, PublishingTarget, SocialAccount
 from .services.diagnostics import build_rejection_diagnostics
 from .services.ai import _build_model_candidates, _clean_media_name_context, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.compliance import evaluate_publish_readiness
@@ -20,7 +20,7 @@ from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.metrics import fetch_facebook_metrics, iter_tool_post_metrics
 from .services.media_transform import build_instagram_ready_image
-from .services.publishing import PublishingError, _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets
+from .services.publishing import PublishingError, _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets, publish_platform
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 from .services.telegram import TELEGRAM_MESSAGE_MAX_LENGTH, _split_telegram_message, build_daily_report_message
 
@@ -1353,6 +1353,39 @@ class InstagramPublishTest(TestCase):
         self.assertEqual(result, "publish-1")
         self.assertEqual(graph_post_mock.call_count, 3)
         self.assertEqual(sleep_mock.call_count, 2)
+
+    @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90)
+    def test_recent_meta_rate_limit_failure_skips_instagram_retry_without_meta_call(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:rate-limit",
+            display_name="IG Rate Limit",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file-rate-limit", "name": "POST18.mp4", "mimeType": "video/mp4"}
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id=file_obj["id"],
+            drive_file_name=file_obj["name"],
+            message="Instagram publish failed: Application request limit reached",
+        )
+
+        with patch("scheduler.services.publishing._publish_to_instagram") as publish_mock:
+            with self.assertRaisesMessage(PublishingError, "Meta rate limit backoff active"):
+                publish_platform(target, SocialAccount.INSTAGRAM, file_obj=file_obj)
+
+        publish_mock.assert_not_called()
+        self.assertEqual(target.post_logs.filter(drive_file_id=file_obj["id"]).count(), 1)
 
 
 class FacebookPublishTest(TestCase):
