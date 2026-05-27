@@ -96,10 +96,12 @@ def build_target_health(target: PublishingTarget) -> dict:
                 content_exhausted = True
                 issues.append("All unique media files have already succeeded on every active platform. Add new files to continue posting.")
             if current_file and pending_platforms:
-                from scheduler.services.publishing import recent_backoff_message
+                from scheduler.services.publishing import recent_backoff_message, recent_credential_backoff_message
 
                 for platform in pending_platforms:
                     message = recent_backoff_message(target, platform, current_file["id"])
+                    if not message:
+                        message = recent_credential_backoff_message(target, platform)
                     if message:
                         backoff_messages.append(f"{platform}: {message}")
                 if backoff_messages:

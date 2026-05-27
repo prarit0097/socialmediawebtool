@@ -1428,6 +1428,45 @@ class HealthTest(TestCase):
         self.assertTrue(health["backoff_messages"])
         self.assertIn("Backoff active", " | ".join(health["issues"]))
 
+    @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90, META_APP_RATE_LIMIT_BACKOFF_MINUTES=1440)
+    def test_health_reports_credential_rate_limit_backoff(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        source_ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-source-health", name="IG Source")
+        source = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:source-health",
+            display_name="Source Health",
+            instagram_account=source_ig,
+            drive_folder_id="source-folder",
+        )
+        rate_log = source.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id="source-file",
+            drive_file_name="SOURCE.mp4",
+            message="Instagram publish failed: Application request limit reached | Meta error details: type=OAuthException, code=4",
+        )
+        PostLog.objects.filter(pk=rate_log.pk).update(created_at=timezone.now() - timedelta(hours=12))
+
+        blocked_ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-blocked-health", name="IG Blocked")
+        blocked = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:blocked-health",
+            display_name="Blocked Health",
+            instagram_account=blocked_ig,
+            drive_folder_id="blocked-folder",
+        )
+        file_obj = {"id": "pending-file", "name": "POST1.mp4", "mimeType": "video/mp4"}
+
+        with patch("scheduler.services.health.list_folder_files", return_value=[file_obj]):
+            health = build_target_health(blocked)
+
+        self.assertEqual(health["pending_platforms"], ["instagram"])
+        self.assertIn("credential/platform", " | ".join(health["backoff_messages"]))
+
     def test_audit_publish_readiness_prints_operational_state(self):
         from unittest.mock import patch
 
@@ -1459,6 +1498,42 @@ class HealthTest(TestCase):
         self.assertIn("current_file: POST1.mp4", text)
         self.assertIn("pending_platforms: instagram", text)
         self.assertIn("backoff:", text)
+
+    def test_diagnose_posting_today_prints_slot_and_blocker_summary(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Token Diagnose", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-diagnose", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:diagnose",
+            display_name="Diagnose Target",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+        )
+        file_obj = {"id": "file-1", "name": "POST1.mp4", "mimeType": "video/mp4"}
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id="file-1",
+            drive_file_name="POST1.mp4",
+            message="Instagram publish failed: Authorization Error",
+        )
+        output = StringIO()
+
+        with patch("scheduler.services.health.list_folder_files", return_value=[file_obj]), patch(
+            "scheduler.services.publishing.list_folder_files",
+            return_value=[file_obj],
+        ):
+            call_command("diagnose_posting_today", "--target-id", str(target.pk), stdout=output)
+
+        text = output.getvalue()
+        self.assertIn("Posting diagnosis", text)
+        self.assertIn("Diagnose Target", text)
+        self.assertIn("slots_today:", text)
+        self.assertIn("today_activity:", text)
 
 
 class MediaTransformTest(TestCase):

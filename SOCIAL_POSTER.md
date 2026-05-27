@@ -376,6 +376,7 @@ systemctl status socialposter-scheduler.service --no-pager
 - Meta `Application request limit reached` ke liye backoff guard add hua. Agar kisi target/platform/file par recent rate-limit failure ho, app configured backoff window tak Meta ko baar-baar hit nahi karegi, taaki scheduler repeated API calls se limit ko aur extend na kare.
 - `META_RATE_LIMIT_BACKOFF_MINUTES` env knob add hua, default `90` minutes. Existing queue/progress same rahegi; backoff ke baad same pending file retry hogi.
 - `META_APP_RATE_LIMIT_BACKOFF_MINUTES` env knob add hua, default `1440` minutes. Meta `Application request limit reached` / code `4` ke baad same credential/platform par publish attempts cooldown me skip honge, taaki scheduler duplicate Meta calls se limit ko aur worsen na kare.
+- `diagnose_posting_today` read-only management command add hua. Ye aaj ke slots, current file, pending platforms, credential/file backoff, content exhaustion, missing Drive, aur latest today logs ek jagah print karta hai so production me "posting kyu nahi hui" quickly trace ho sake.
 - Tests 60 tak update hue, including rate-limit backoff coverage that verifies no extra Meta call or duplicate failure log is created during the backoff.
 - Full reliability hardening pass add hua:
   - Meta Graph error messages ab sirf generic text nahi dikhate; agar Meta response me `type`, `code`, `subcode`, ya `fbtrace_id` aaye to diagnostics me preserve hote hain.
