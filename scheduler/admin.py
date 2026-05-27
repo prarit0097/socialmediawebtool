@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AIMediaInsight, DailyReportLog, MediaAsset, MetaCredential, PostLog, PublishingTarget, SocialAccount
+from .models import AIMediaInsight, DailyReportLog, MediaAsset, MetaCredential, PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
 
 
 @admin.register(MetaCredential)
@@ -28,6 +28,13 @@ class PostLogAdmin(admin.ModelAdmin):
     list_display = ("target", "platform", "scheduled_for", "status", "published_at")
     list_filter = ("platform", "status")
     search_fields = ("drive_file_name", "drive_file_id", "meta_creation_id")
+
+
+@admin.register(ScheduledPostRun)
+class ScheduledPostRunAdmin(admin.ModelAdmin):
+    list_display = ("target", "scheduled_for", "status", "drive_file_name", "attempt_count", "next_retry_at")
+    list_filter = ("status",)
+    search_fields = ("drive_file_name", "drive_file_id", "last_error")
 
 
 @admin.register(MediaAsset)

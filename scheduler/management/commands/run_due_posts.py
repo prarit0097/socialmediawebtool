@@ -14,7 +14,8 @@ class Command(BaseCommand):
                     f"Posting run completed at {result['checked_at']}. "
                     f"Checked={result['checked_targets']} Success={result['success']} "
                     f"Failed={result['failed']} Skipped={result['skipped']} "
-                    f"Backoff={result['backoff']} ContentExhausted={result['content_exhausted']}"
+                    f"Backoff={result['backoff']} ContentExhausted={result['content_exhausted']} "
+                    f"Misconfigured={result.get('misconfigured', 0)} ProcessedRuns={result.get('processed_runs', 0)}"
                 )
             )
         )

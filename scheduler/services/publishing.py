@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import os
 from pathlib import Path
 import time
+import uuid
 
 import requests
 from django.conf import settings
+from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from scheduler.models import PostLog, PublishingTarget, SocialAccount
+from scheduler.models import PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
 from scheduler.services.ai import AIServiceError, build_ai_caption_for_media
 from scheduler.services.cache import build_public_asset_url, ensure_cached_asset, get_cached_public_urls
 from scheduler.services.compliance import evaluate_publish_readiness
@@ -56,6 +60,21 @@ CONTENT_EXHAUSTED_MARKERS = (
     "all unique media files",
     "no publishable image or video files",
 )
+RUN_RETRY_STATUSES = (
+    ScheduledPostRun.STATUS_PENDING,
+    ScheduledPostRun.STATUS_BACKOFF,
+    ScheduledPostRun.STATUS_PARTIAL_SUCCESS,
+)
+RUN_LOCK_TTL_MINUTES = 30
+INSTAGRAM_CONTENT_LIMIT_DEFAULT = 100
+
+
+def _scheduler_backlog_days() -> int:
+    return max(int(getattr(settings, "SCHEDULER_BACKLOG_DAYS", 2)), 1)
+
+
+def _scheduler_max_runs_per_tick() -> int:
+    return max(int(getattr(settings, "SCHEDULER_MAX_RUNS_PER_TICK", 5)), 1)
 
 
 def _parse_graph_response(response) -> dict:
@@ -276,6 +295,105 @@ def get_daily_slots(target: PublishingTarget, day=None) -> list[datetime]:
     return [start_dt + interval * index for index in range(target.posts_per_day)]
 
 
+def _backlog_start(now) -> datetime:
+    local_now = timezone.localtime(now)
+    start_date = local_now.date() - timedelta(days=_scheduler_backlog_days() - 1)
+    return timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
+
+
+def _eligible_slots(target: PublishingTarget, now) -> list[datetime]:
+    local_now = timezone.localtime(now)
+    return sorted(slot for slot in get_daily_slots(target, local_now) if slot <= local_now)
+
+
+def ensure_scheduled_runs(target: PublishingTarget, now) -> list[ScheduledPostRun]:
+    runs: list[ScheduledPostRun] = []
+    active_platforms = set(_active_platforms(target))
+    for slot in _eligible_slots(target, now):
+        try:
+            run, _ = ScheduledPostRun.objects.get_or_create(target=target, scheduled_for=slot)
+        except IntegrityError:
+            run = ScheduledPostRun.objects.get(target=target, scheduled_for=slot)
+        if run.status not in ScheduledPostRun.TERMINAL_STATUSES:
+            _sync_run_successes(run, active_platforms)
+            if run.status == ScheduledPostRun.STATUS_SUCCESS:
+                run.save(update_fields=["drive_file_id", "drive_file_name", "status", "platform_status", "next_retry_at", "last_error", "updated_at"])
+        runs.append(run)
+    return runs
+
+
+def _run_due_queryset(target: PublishingTarget, now):
+    stale_lock_before = now - timedelta(minutes=RUN_LOCK_TTL_MINUTES)
+    return (
+        target.scheduled_runs.filter(scheduled_for__lte=now, scheduled_for__gte=_backlog_start(now))
+        .filter(
+            Q(status__in=RUN_RETRY_STATUSES)
+            | Q(status=ScheduledPostRun.STATUS_RUNNING, locked_at__lt=stale_lock_before)
+        )
+        .filter(Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=now))
+        .order_by("scheduled_for")
+    )
+
+
+def _claim_run(run: ScheduledPostRun, now) -> ScheduledPostRun | None:
+    stale_lock_before = now - timedelta(minutes=RUN_LOCK_TTL_MINUTES)
+    owner = f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
+    with transaction.atomic():
+        updated = (
+            ScheduledPostRun.objects.filter(pk=run.pk)
+            .filter(
+                Q(status__in=RUN_RETRY_STATUSES)
+                | Q(status=ScheduledPostRun.STATUS_RUNNING, locked_at__lt=stale_lock_before)
+            )
+            .filter(Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=now))
+            .update(status=ScheduledPostRun.STATUS_RUNNING, lock_owner=owner, locked_at=now)
+        )
+    if not updated:
+        return None
+    return ScheduledPostRun.objects.select_related("target", "target__credential", "target__facebook_account", "target__instagram_account").get(pk=run.pk)
+
+
+def _sync_run_successes(run: ScheduledPostRun, active_platforms: set[str]) -> None:
+    statuses = dict(run.platform_status or {})
+    first_log = (
+        run.target.post_logs.filter(scheduled_for=run.scheduled_for)
+        .exclude(drive_file_id="")
+        .order_by("created_at")
+        .first()
+    )
+    if first_log and not run.drive_file_id:
+        run.drive_file_id = first_log.drive_file_id
+        run.drive_file_name = first_log.drive_file_name
+    for platform in active_platforms:
+        if run.target.post_logs.filter(
+            scheduled_for=run.scheduled_for,
+            platform=platform,
+            status=PostLog.STATUS_SUCCESS,
+        ).exists() or (run.drive_file_id and _platform_already_succeeded_for_file(run.target, platform, run.drive_file_id)):
+            statuses[platform] = PostLog.STATUS_SUCCESS
+    if active_platforms and all(statuses.get(platform) == PostLog.STATUS_SUCCESS for platform in active_platforms):
+        run.status = ScheduledPostRun.STATUS_SUCCESS
+        run.next_retry_at = None
+        run.last_error = ""
+    run.platform_status = statuses
+
+
+def _locked_file_from_run(run: ScheduledPostRun) -> dict:
+    if not run.drive_file_id:
+        file_obj = _get_slot_locked_file(run.target, run.scheduled_for)
+        run.drive_file_id = file_obj.get("id", "")
+        run.drive_file_name = file_obj.get("name", "")
+        run.drive_mime_type = file_obj.get("mimeType", "")
+        run.save(update_fields=["drive_file_id", "drive_file_name", "drive_mime_type", "updated_at"])
+        return file_obj
+
+    files = list_folder_files(run.target.drive_folder_id)
+    for file_obj in files:
+        if file_obj.get("id") == run.drive_file_id and is_publishable_media(file_obj):
+            return file_obj
+    raise PublishingError("The media file already assigned to this scheduled run is no longer available in Drive.")
+
+
 def pick_next_file(target: PublishingTarget) -> dict:
     files = list_folder_files(target.drive_folder_id)
     media_files = [file_obj for file_obj in files if is_publishable_media(file_obj)]
@@ -351,6 +469,9 @@ def _platform_already_succeeded_for_file(target: PublishingTarget, platform: str
 def _slot_is_complete(target: PublishingTarget, scheduled_for, active_platforms: set[str]) -> bool:
     if not active_platforms:
         return False
+    run = target.scheduled_runs.filter(scheduled_for=scheduled_for).first()
+    if run and run.status == ScheduledPostRun.STATUS_SUCCESS:
+        return True
     slot_successes = set(
         target.post_logs.filter(
             scheduled_for=scheduled_for,
@@ -384,9 +505,9 @@ def build_caption(target: PublishingTarget, file_obj: dict | None = None) -> str
 def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     if not target.facebook_account:
         return ""
-    token = target.facebook_account.access_token or target.credential.access_token
+    token = target.facebook_account.access_token
     if not token:
-        raise PublishingError("Facebook page access token not available.")
+        raise PublishingError("Facebook Page access token not available.")
     caption = build_caption(target, file_obj=file_obj)
     mime_type = file_obj.get("mimeType", "")
 
@@ -468,6 +589,30 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     raise PublishingError("Facebook publish failed: " + " | ".join(errors))
 
 
+def _check_instagram_content_publishing_limit(instagram_account_id: str, access_token: str) -> None:
+    data = _graph_get(f"/{instagram_account_id}/content_publishing_limit", access_token)
+    rows = data.get("data") if isinstance(data, dict) else None
+    if isinstance(rows, list) and rows:
+        row = rows[0] if isinstance(rows[0], dict) else {}
+    elif isinstance(data, dict):
+        row = data
+    else:
+        row = {}
+
+    raw_usage = row.get("quota_usage") or row.get("usage") or row.get("used")
+    config = row.get("config") if isinstance(row.get("config"), dict) else {}
+    raw_total = config.get("quota_total") or row.get("quota_total") or row.get("limit") or INSTAGRAM_CONTENT_LIMIT_DEFAULT
+    try:
+        usage = int(raw_usage)
+        total = int(raw_total)
+    except (TypeError, ValueError):
+        return
+    if total > 0 and usage >= total:
+        raise PublishBackoff(
+            f"Instagram content publishing limit reached for this account ({usage}/{total} API posts in the rolling window)."
+        )
+
+
 def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
     if not target.instagram_account:
         return ""
@@ -475,6 +620,7 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
     token = target.instagram_account.access_token or page_token or target.credential.access_token
     if not token:
         raise PublishingError("Instagram publishing token not available.")
+    _check_instagram_content_publishing_limit(target.instagram_account.external_id, token)
     caption = build_caption(target, file_obj=file_obj)
     errors = []
     mime_type = file_obj.get("mimeType", "")
@@ -555,8 +701,9 @@ def _publish_instagram_container_with_retry(
     wait_error: PublishingError,
 ) -> dict:
     last_publish_error: PublishingError | None = None
-    for _ in range(settings.INSTAGRAM_CONTAINER_MAX_POLLS):
-        time.sleep(settings.INSTAGRAM_CONTAINER_POLL_SECONDS)
+    for attempt in range(settings.INSTAGRAM_CONTAINER_MAX_POLLS):
+        if attempt:
+            time.sleep(settings.INSTAGRAM_CONTAINER_POLL_SECONDS)
         try:
             return _publish_instagram_container(instagram_account_id, container_id, access_token)
         except PublishingError as exc:
@@ -575,19 +722,26 @@ def _wait_for_instagram_container(container_id: str, access_token: str) -> None:
     if not container_id:
         raise PublishingError("Instagram container ID missing.")
 
-    for _ in range(settings.INSTAGRAM_CONTAINER_MAX_POLLS):
+    for attempt in range(settings.INSTAGRAM_CONTAINER_MAX_POLLS):
         container = _graph_get(f"/{container_id}", access_token, {"fields": "status_code,status"})
         status_code = (container.get("status_code") or container.get("status") or "").upper()
         if status_code in {"FINISHED", "PUBLISHED"}:
             return
         if status_code in {"ERROR", "EXPIRED"}:
             raise PublishingError(f"Instagram container failed with status {status_code}.")
-        time.sleep(settings.INSTAGRAM_CONTAINER_POLL_SECONDS)
+        if attempt < settings.INSTAGRAM_CONTAINER_MAX_POLLS - 1:
+            time.sleep(settings.INSTAGRAM_CONTAINER_POLL_SECONDS)
 
     raise PublishingError("Instagram container processing timed out before reaching FINISHED.")
 
 
-def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None, file_obj: dict | None = None) -> None:
+def publish_platform(
+    target: PublishingTarget,
+    platform: str,
+    scheduled_for=None,
+    file_obj: dict | None = None,
+    scheduled_run: ScheduledPostRun | None = None,
+) -> None:
     scheduled_for = scheduled_for or timezone.now()
     file_obj = file_obj or _get_slot_locked_file(target, scheduled_for)
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
@@ -604,6 +758,7 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
 
     log = PostLog.objects.create(
         target=target,
+        scheduled_run=scheduled_run,
         platform=platform,
         scheduled_for=scheduled_for,
         drive_file_id=file_obj["id"],
@@ -624,7 +779,7 @@ def publish_platform(target: PublishingTarget, platform: str, scheduled_for=None
         log.save()
         raise
 
-def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
+def publish_target(target: PublishingTarget, scheduled_for=None, scheduled_run: ScheduledPostRun | None = None) -> None:
     scheduled_for = scheduled_for or timezone.now()
     failures = []
     backoffs = []
@@ -634,7 +789,7 @@ def publish_target(target: PublishingTarget, scheduled_for=None) -> None:
         if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
             continue
         try:
-            publish_platform(target, platform, scheduled_for=scheduled_for, file_obj=file_obj)
+            publish_platform(target, platform, scheduled_for=scheduled_for, file_obj=file_obj, scheduled_run=scheduled_run)
             attempted += 1
         except PublishBackoff as exc:
             backoffs.append(f"{platform}: {exc}")
@@ -667,45 +822,186 @@ def publish_target_now(target: PublishingTarget) -> None:
         raise PublishingError("Target is inactive.")
     if not target.drive_folder_id:
         raise PublishingError("Drive folder is not configured for this target.")
-    publish_target(target, scheduled_for=timezone.now())
+    scheduled_for = timezone.now()
+    run, _ = ScheduledPostRun.objects.get_or_create(target=target, scheduled_for=scheduled_for)
+    claimed = _claim_run(run, scheduled_for)
+    if not claimed:
+        raise PublishBackoff("Another publish run is already active for this target/slot.")
+    outcome = process_scheduled_run(claimed, scheduled_for)
+    if outcome in {"backoff", "failed", "misconfigured", "content_exhausted"}:
+        raise PublishingError(claimed.last_error or target.last_error or "Manual publish did not complete.")
+
+
+def process_scheduled_run(run: ScheduledPostRun, now=None) -> str:
+    now = timezone.localtime(now or timezone.now())
+    target = run.target
+    active_platforms = set(_active_platforms(target))
+
+    run.attempt_count += 1
+    run.next_retry_at = None
+    run.last_error = ""
+    _sync_run_successes(run, active_platforms)
+    if run.status == ScheduledPostRun.STATUS_SUCCESS:
+        run.lock_owner = ""
+        run.locked_at = None
+        run.save(update_fields=["attempt_count", "drive_file_id", "drive_file_name", "status", "platform_status", "next_retry_at", "last_error", "lock_owner", "locked_at", "updated_at"])
+        return "complete"
+
+    if not target.drive_folder_id:
+        message = "Drive folder is not configured for this target."
+        run.status = ScheduledPostRun.STATUS_MISCONFIGURED
+        run.last_error = message
+        run.lock_owner = ""
+        run.locked_at = None
+        run.save(update_fields=["attempt_count", "status", "last_error", "lock_owner", "locked_at", "updated_at"])
+        target.last_status = "misconfigured"
+        target.last_error = message
+        target.save(update_fields=["last_status", "last_error", "updated_at"])
+        return "misconfigured"
+
+    if not active_platforms:
+        message = "No Facebook or Instagram account linked for this target."
+        run.status = ScheduledPostRun.STATUS_MISCONFIGURED
+        run.last_error = message
+        run.lock_owner = ""
+        run.locked_at = None
+        run.save(update_fields=["attempt_count", "status", "last_error", "lock_owner", "locked_at", "updated_at"])
+        target.last_status = "misconfigured"
+        target.last_error = message
+        target.save(update_fields=["last_status", "last_error", "updated_at"])
+        return "misconfigured"
+
+    try:
+        file_obj = _locked_file_from_run(run)
+    except (PublishingError, DriveConfigError) as exc:
+        message = str(exc)
+        run.status = ScheduledPostRun.STATUS_SKIPPED if _is_content_exhausted_error(message) else ScheduledPostRun.STATUS_FAILED
+        run.last_error = message
+        run.lock_owner = ""
+        run.locked_at = None
+        run.save(update_fields=["attempt_count", "status", "last_error", "lock_owner", "locked_at", "updated_at"])
+        target.last_status = "content_exhausted" if _is_content_exhausted_error(message) else "failed"
+        target.last_error = message
+        target.save(update_fields=["last_status", "last_error", "updated_at"])
+        return "content_exhausted" if _is_content_exhausted_error(message) else "failed"
+
+    statuses = dict(run.platform_status or {})
+    failures: list[str] = []
+    backoffs: list[str] = []
+    published_any = False
+
+    for platform in active_platforms:
+        if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
+            statuses[platform] = PostLog.STATUS_SUCCESS
+            continue
+        try:
+            publish_platform(target, platform, scheduled_for=run.scheduled_for, file_obj=file_obj, scheduled_run=run)
+            statuses[platform] = PostLog.STATUS_SUCCESS
+            published_any = True
+        except PublishBackoff as exc:
+            statuses[platform] = ScheduledPostRun.STATUS_BACKOFF
+            backoffs.append(f"{platform}: {exc}")
+        except Exception as exc:
+            statuses[platform] = PostLog.STATUS_FAILED
+            failures.append(f"{platform}: {exc}")
+
+    all_success = all(statuses.get(platform) == PostLog.STATUS_SUCCESS for platform in active_platforms)
+    messages = failures + backoffs
+    retry_minutes = max((_backoff_minutes_for_failure(message) for message in messages), default=0)
+
+    if all_success:
+        run.status = ScheduledPostRun.STATUS_SUCCESS
+        run.next_retry_at = None
+        run.last_error = ""
+        target.last_posted_at = timezone.now()
+        target.last_status = "success"
+        target.last_error = ""
+        target.save(update_fields=["last_posted_at", "last_status", "last_error", "updated_at"])
+        outcome = "success" if published_any else "complete"
+    elif backoffs or retry_minutes:
+        run.status = ScheduledPostRun.STATUS_BACKOFF
+        run.next_retry_at = now + timedelta(minutes=retry_minutes or settings.META_RATE_LIMIT_BACKOFF_MINUTES)
+        run.last_error = " | ".join(messages)
+        target.last_status = "backoff"
+        target.last_error = run.last_error
+        target.save(update_fields=["last_status", "last_error", "updated_at"])
+        outcome = "backoff"
+    elif failures:
+        run.status = ScheduledPostRun.STATUS_PARTIAL_SUCCESS if any(status == PostLog.STATUS_SUCCESS for status in statuses.values()) else ScheduledPostRun.STATUS_FAILED
+        run.next_retry_at = None
+        run.last_error = " | ".join(failures)
+        target.last_status = "failed"
+        target.last_error = run.last_error
+        target.save(update_fields=["last_status", "last_error", "updated_at"])
+        outcome = "failed"
+    else:
+        run.status = ScheduledPostRun.STATUS_SKIPPED
+        run.next_retry_at = None
+        run.last_error = "No platforms needed publishing for this scheduled run."
+        outcome = "skipped"
+
+    run.platform_status = statuses
+    run.lock_owner = ""
+    run.locked_at = None
+    run.save(
+        update_fields=[
+            "attempt_count",
+            "status",
+            "platform_status",
+            "next_retry_at",
+            "last_error",
+            "lock_owner",
+            "locked_at",
+            "updated_at",
+        ]
+    )
+    return outcome
 
 
 def publish_due_targets(reference_time=None) -> dict:
     now = timezone.localtime(reference_time or timezone.now())
-    catchup_window = timedelta(minutes=settings.SCHEDULER_CATCHUP_MINUTES)
     success = 0
     failed = 0
     skipped = 0
     backoff = 0
     content_exhausted = 0
+    misconfigured = 0
     checked_targets = 0
+    processed_runs = 0
+    max_runs = _scheduler_max_runs_per_tick()
     targets = PublishingTarget.objects.filter(is_active=True).select_related("credential", "facebook_account", "instagram_account")
     for target in targets:
         checked_targets += 1
+        if processed_runs >= max_runs:
+            break
         try:
-            if not target.drive_folder_id:
-                skipped += 1
+            ensure_scheduled_runs(target, now)
+            due_runs = list(_run_due_queryset(target, now)[:1])
+            if not due_runs:
                 continue
-            due_slots = [
-                slot
-                for slot in get_daily_slots(target, now)
-                if slot <= now and (now - slot) <= catchup_window
-            ]
-            if not due_slots:
-                continue
-            active_platforms = set(_active_platforms(target))
-            completed_runs = 0
-            for slot in due_slots:
-                if _slot_is_complete(target, slot, active_platforms):
-                    completed_runs += 1
-                else:
+            for run in due_runs:
+                claimed = _claim_run(run, now)
+                if not claimed:
+                    continue
+                outcome = process_scheduled_run(claimed, now)
+                processed_runs += 1
+                if outcome == "success":
+                    success += 1
+                elif outcome == "backoff":
+                    skipped += 1
+                    backoff += 1
+                elif outcome == "content_exhausted":
+                    skipped += 1
+                    content_exhausted += 1
+                elif outcome == "misconfigured":
+                    skipped += 1
+                    misconfigured += 1
+                elif outcome in {"failed"}:
+                    failed += 1
+                elif outcome in {"skipped", "complete"}:
+                    skipped += 1
+                if processed_runs >= max_runs:
                     break
-            published_any = False
-            if completed_runs < len(due_slots):
-                publish_target(target, scheduled_for=due_slots[completed_runs])
-                published_any = True
-            if published_any:
-                success += 1
         except PublishBackoff as exc:
             target.last_status = "backoff"
             target.last_error = str(exc)
@@ -728,6 +1024,8 @@ def publish_due_targets(reference_time=None) -> dict:
         "skipped": skipped,
         "backoff": backoff,
         "content_exhausted": content_exhausted,
+        "misconfigured": misconfigured,
+        "processed_runs": processed_runs,
         "checked_targets": checked_targets,
         "checked_at": now,
     }

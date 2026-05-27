@@ -391,3 +391,35 @@ systemctl status socialposter-scheduler.service --no-pager
   - Scheduler heartbeat output ko force-flush kiya gaya taaki systemd journal me `Scheduler started` aur periodic `Scheduler heartbeat ...` lines immediately visible hon.
   - Scheduler heartbeat ko logging path par bhi bheja gaya, taaki agar systemd stdout capture na kare to stderr/logging ke through journal me operational status visible rahe.
   - VPS par heartbeat duplicate line aa rahi thi kyunki stdout aur logging dono journal me capture ho rahe the; scheduler heartbeat ko single logging path par rakha gaya.
+2026-05-27
+- Scheduler reliability hardening implement hua. Ab due slots sirf 60-minute catchup window par depend nahi karte; aaj ke missed slots ke liye durable `ScheduledPostRun` rows banti hain, aur scheduler bounded backlog se pending/backoff runs retry karta hai.
+- New scheduler env knobs:
+  - `SCHEDULER_BACKLOG_DAYS=2`
+  - `SCHEDULER_MAX_RUNS_PER_TICK=5`
+  - `INSTAGRAM_CONTAINER_POLL_SECONDS=60`
+  - `INSTAGRAM_CONTAINER_MAX_POLLS=5`
+- `ScheduledPostRun` statuses dashboard/diagnostics ke liye source of truth hain: `pending`, `running`, `partial_success`, `success`, `skipped`, `backoff`, `failed`, `misconfigured`. Isse "aaj no PostLog rows" wali confusing situation me bhi actual blocker visible rahega.
+- Scheduler one target ka one slot per tick process karta hai, taaki backlog recover ho but same target par burst posting na ho. Aaj ke missed 9 AM slot ko same din later process kiya ja sakta hai; brand-new yesterday rows create nahi hoti, taaki stale content accidentally post na ho.
+- Same-file queue preserve hai: agar Facebook success aur Instagram backoff/fail ho, run wahi Drive file locked rakhega jab tak active platforms complete ya terminal state me na pahunch jayein.
+- Meta preflight hardening:
+  - Instagram image conversion ab JPEG 8 MB limit fail-closed karti hai.
+  - Instagram container polling default Meta-doc-friendly 60 seconds x 5 polls hai, with `ERROR`/`EXPIRED` terminal handling.
+  - Instagram `content_publishing_limit` preflight add hua, taaki account API publish limit hit hone par container create karne se pehle backoff ho.
+  - Facebook Page publishing ab generic credential token fallback use nahi karta; Page access token required hai.
+  - Facebook photo upload 10 MB se upar locally block hota hai.
+- Drive media cache stale-file protection add hua. Cached asset ab Drive `modifiedTime`, checksum/size/name fingerprint change hone par re-download hoga.
+- `diagnose_posting_today` output ab backlog window, scheduled-run summary, per-target scheduled run status, blocker, current file, pending platform, aur logs ek saath dikhata hai.
+- VPS rollout:
+  ```bash
+  cd /opt/drive-to-meta-scheduler/app
+  git pull origin main
+  ./.venv/bin/python manage.py migrate
+  ./.venv/bin/python manage.py check
+  ./.venv/bin/python manage.py makemigrations --check --dry-run
+  ./.venv/bin/python manage.py test
+  systemctl restart socialposter-web.service
+  systemctl restart socialposter-scheduler.service
+  ./.venv/bin/python manage.py diagnose_posting_today --target-id 63
+  journalctl -u socialposter-scheduler.service -n 80 --no-pager -l
+  ```
+- Tests 78 tak update hue, covering backlog recovery, scheduled-run backoff visibility, content exhaustion state, Facebook/Instagram preflights, Instagram polling terminals, and Drive cache fingerprint refresh.

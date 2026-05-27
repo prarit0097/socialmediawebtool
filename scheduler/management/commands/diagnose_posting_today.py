@@ -5,7 +5,7 @@ from django.core.management.base import BaseCommand
 from django.db.models import Count
 from django.utils import timezone
 
-from scheduler.models import PostLog, PublishingTarget
+from scheduler.models import PostLog, PublishingTarget, ScheduledPostRun
 from scheduler.services.health import build_target_health
 from scheduler.services.publishing import _active_platforms, _slot_is_complete, get_daily_slots
 
@@ -20,6 +20,9 @@ class Command(BaseCommand):
         self.stdout.write(message.encode("ascii", "backslashreplace").decode("ascii"))
 
     def _slot_status(self, target, slot, active_platforms, now):
+        run = target.scheduled_runs.filter(scheduled_for=slot).first()
+        if run:
+            return run.status
         if _slot_is_complete(target, slot, active_platforms):
             return "done"
         if slot > now:
@@ -27,7 +30,9 @@ class Command(BaseCommand):
         age_minutes = int((now - slot).total_seconds() // 60)
         if age_minutes <= settings.SCHEDULER_CATCHUP_MINUTES:
             return "due-window"
-        return "missed-outside-catchup"
+        if age_minutes <= settings.SCHEDULER_BACKLOG_DAYS * 24 * 60:
+            return "backlog-pending"
+        return "missed-outside-backlog"
 
     def handle(self, *args, **options):
         now = timezone.localtime()
@@ -44,8 +49,10 @@ class Command(BaseCommand):
 
         self._safe_write(f"Posting diagnosis at {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         self._safe_write(f"Catchup window: {settings.SCHEDULER_CATCHUP_MINUTES} minutes")
+        self._safe_write(f"Backlog window: {settings.SCHEDULER_BACKLOG_DAYS} day(s)")
 
         today_logs = PostLog.objects.filter(created_at__gte=start, created_at__lt=end)
+        today_runs = ScheduledPostRun.objects.filter(scheduled_for__gte=start, scheduled_for__lt=end)
         summary = today_logs.values("status", "platform").annotate(count=Count("id")).order_by("status", "platform")
         if summary:
             self._safe_write("Today log summary:")
@@ -53,6 +60,13 @@ class Command(BaseCommand):
                 self._safe_write(f"  {row['platform']} {row['status']}: {row['count']}")
         else:
             self._safe_write("Today log summary: no PostLog rows created today.")
+        run_summary = today_runs.values("status").annotate(count=Count("id")).order_by("status")
+        if run_summary:
+            self._safe_write("Today scheduled-run summary:")
+            for row in run_summary:
+                self._safe_write(f"  {row['status']}: {row['count']}")
+        else:
+            self._safe_write("Today scheduled-run summary: no ScheduledPostRun rows created today.")
 
         if not targets.exists():
             self._safe_write("No matching active targets.")
@@ -67,6 +81,11 @@ class Command(BaseCommand):
                 today_logs.filter(target=target)
                 .order_by("-created_at")
                 .values("platform", "status", "drive_file_name", "message", "created_at", "published_at")[:6]
+            )
+            target_runs = list(
+                today_runs.filter(target=target)
+                .order_by("scheduled_for")
+                .values("scheduled_for", "status", "drive_file_name", "last_error")[:6]
             )
 
             self._safe_write("")
@@ -93,6 +112,15 @@ class Command(BaseCommand):
             if health["backoff_messages"]:
                 for message in health["backoff_messages"]:
                     self._safe_write(f"  blocker: {message}")
+            if target_runs:
+                self._safe_write("  scheduled_runs:")
+                for run in target_runs:
+                    when = timezone.localtime(run["scheduled_for"]).strftime("%H:%M")
+                    reason = (run["last_error"] or "").replace("\n", " ")[:180]
+                    self._safe_write(
+                        f"    {when} {run['status']} {run['drive_file_name'] or '-'}"
+                        f"{' :: ' + reason if reason else ''}"
+                    )
             if health["content_exhausted"]:
                 self._safe_write("  blocker: content exhausted; add new Drive media files.")
             if not target.drive_folder_id:

@@ -114,13 +114,22 @@ class PostLog(models.Model):
     STATUS_PENDING = "pending"
     STATUS_SUCCESS = "success"
     STATUS_FAILED = "failed"
+    STATUS_SKIPPED = "skipped"
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
         (STATUS_SUCCESS, "Success"),
         (STATUS_FAILED, "Failed"),
+        (STATUS_SKIPPED, "Skipped"),
     ]
 
     target = models.ForeignKey(PublishingTarget, on_delete=models.CASCADE, related_name="post_logs")
+    scheduled_run = models.ForeignKey(
+        "ScheduledPostRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="post_logs",
+    )
     platform = models.CharField(max_length=20, choices=SocialAccount.PLATFORM_CHOICES)
     scheduled_for = models.DateTimeField()
     published_at = models.DateTimeField(null=True, blank=True)
@@ -133,6 +142,63 @@ class PostLog(models.Model):
 
     class Meta:
         ordering = ["-scheduled_for", "-created_at"]
+
+
+class ScheduledPostRun(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_PARTIAL_SUCCESS = "partial_success"
+    STATUS_SUCCESS = "success"
+    STATUS_SKIPPED = "skipped"
+    STATUS_BACKOFF = "backoff"
+    STATUS_FAILED = "failed"
+    STATUS_MISCONFIGURED = "misconfigured"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_PARTIAL_SUCCESS, "Partial success"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_SKIPPED, "Skipped"),
+        (STATUS_BACKOFF, "Backoff"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_MISCONFIGURED, "Misconfigured"),
+    ]
+    TERMINAL_STATUSES = {
+        STATUS_SUCCESS,
+        STATUS_SKIPPED,
+        STATUS_FAILED,
+        STATUS_MISCONFIGURED,
+    }
+
+    target = models.ForeignKey(PublishingTarget, on_delete=models.CASCADE, related_name="scheduled_runs")
+    scheduled_for = models.DateTimeField()
+    drive_file_id = models.CharField(max_length=255, blank=True)
+    drive_file_name = models.CharField(max_length=255, blank=True)
+    drive_mime_type = models.CharField(max_length=120, blank=True)
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    platform_status = models.JSONField(default=dict, blank=True)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    lock_owner = models.CharField(max_length=120, blank=True)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("target", "scheduled_for")
+        ordering = ["scheduled_for", "target_id"]
+        indexes = [
+            models.Index(fields=["status", "next_retry_at"]),
+            models.Index(fields=["target", "scheduled_for"]),
+        ]
+
+    def __str__(self):
+        return f"{self.target_id} @ {self.scheduled_for} ({self.status})"
+
+    @property
+    def is_terminal(self):
+        return self.status in self.TERMINAL_STATUSES
 
 
 class MediaAsset(models.Model):
@@ -153,6 +219,9 @@ class MediaAsset(models.Model):
     public_filename = models.CharField(max_length=255)
     local_path = models.CharField(max_length=500, blank=True)
     source_mime_type = models.CharField(max_length=120, blank=True)
+    drive_modified_time = models.CharField(max_length=80, blank=True)
+    drive_checksum = models.CharField(max_length=120, blank=True)
+    source_fingerprint = models.CharField(max_length=255, blank=True)
     content_type = models.CharField(max_length=120, blank=True)
     file_size = models.PositiveBigIntegerField(default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)

@@ -18,6 +18,7 @@ TEMP_HOST_MARKERS = (
     "trycloudflare.com",
 )
 SUPPORTED_INSTAGRAM_VIDEO_TYPES = {"video/mp4", "video/quicktime"}
+FACEBOOK_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 
 
 @dataclass
@@ -52,6 +53,13 @@ def _caption_looks_like_filename(caption: str, file_obj: dict) -> bool:
     return bool(caption_text and stem and caption_text == stem)
 
 
+def _file_size(file_obj: dict) -> int:
+    try:
+        return int(file_obj.get("size") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_target_policy_warnings(target: PublishingTarget) -> list[str]:
     warnings: list[str] = []
     if target.instagram_account and not is_public_base_ready():
@@ -61,7 +69,7 @@ def build_target_policy_warnings(target: PublishingTarget) -> list[str]:
     if target.instagram_account and not (target.instagram_account.access_token or target.facebook_account_id or target.credential.access_token):
         warnings.append("Instagram token chain looks weak. A linked Facebook page token is preferred for reliable publishing.")
     if target.facebook_account and not target.facebook_account.access_token:
-        warnings.append("Facebook page access token is missing; the app may need to fall back to the broader credential token.")
+        warnings.append("Facebook page access token is missing; Page publishing requires a Page access token.")
     return warnings
 
 
@@ -92,8 +100,10 @@ def evaluate_publish_readiness(
         if mime_type.startswith("video/") and mime_type not in SUPPORTED_INSTAGRAM_VIDEO_TYPES:
             result.blocking_issues.append("Instagram video publishing only supports MP4 or MOV inputs in this app.")
 
-    if platform == SocialAccount.FACEBOOK and not (target.facebook_account and (target.facebook_account.access_token or target.credential.access_token)):
-        result.blocking_issues.append("Facebook publish token is not available.")
+    if platform == SocialAccount.FACEBOOK and not (target.facebook_account and target.facebook_account.access_token):
+        result.blocking_issues.append("Facebook Page access token is not available.")
+    if platform == SocialAccount.FACEBOOK and mime_type.startswith("image/") and _file_size(file_obj) > FACEBOOK_PHOTO_MAX_BYTES:
+        result.blocking_issues.append("Facebook photo publishing is blocked because the image is over Meta's 10 MB Page Photos limit.")
     if platform == SocialAccount.INSTAGRAM and not (
         (target.instagram_account and target.instagram_account.access_token)
         or (target.facebook_account and target.facebook_account.access_token)

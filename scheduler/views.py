@@ -86,7 +86,8 @@ def dashboard(request):
                     "Posting run completed. "
                     f"Checked={result['checked_targets']} Success={result['success']} "
                     f"Failed={result['failed']} Skipped={result['skipped']} "
-                    f"Backoff={result['backoff']} Content exhausted={result['content_exhausted']}"
+                    f"Backoff={result['backoff']} Content exhausted={result['content_exhausted']} "
+                    f"Misconfigured={result.get('misconfigured', 0)} Processed runs={result.get('processed_runs', 0)}"
                 ),
             )
             return redirect("scheduler:dashboard")

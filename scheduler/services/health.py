@@ -6,7 +6,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 
-from scheduler.models import PostLog, PublishingTarget
+from scheduler.models import PostLog, PublishingTarget, ScheduledPostRun
 from scheduler.services.compliance import SUPPORTED_INSTAGRAM_VIDEO_TYPES, build_target_policy_warnings
 from scheduler.services.drive import DriveConfigError, find_caption_file, is_publishable_media, list_folder_files
 from scheduler.services.proxy import is_public_base_ready
@@ -14,7 +14,8 @@ from scheduler.services.proxy import is_public_base_ready
 
 def _cache_key(target: PublishingTarget) -> str:
     latest_log_id = target.post_logs.order_by("-created_at").values_list("id", flat=True).first() or 0
-    return f"target-health:{target.pk}:{int(target.updated_at.timestamp())}:{latest_log_id}"
+    latest_run_id = target.scheduled_runs.order_by("-updated_at").values_list("id", flat=True).first() or 0
+    return f"target-health:{target.pk}:{int(target.updated_at.timestamp())}:{latest_log_id}:{latest_run_id}"
 
 
 def _caption_matches_filename(caption: str, file_name: str) -> bool:
@@ -147,8 +148,11 @@ def build_target_health(target: PublishingTarget) -> dict:
         now = timezone.localtime()
         active_platform_set = set(_active_platforms(target))
         for slot in get_daily_slots(target, now):
-            if _slot_is_complete(target, slot, active_platform_set):
-                slot_status = "done"
+            run = target.scheduled_runs.filter(scheduled_for=slot).first()
+            if run:
+                slot_status = run.status
+            elif _slot_is_complete(target, slot, active_platform_set):
+                slot_status = ScheduledPostRun.STATUS_SUCCESS
             elif slot <= now:
                 slot_status = "due"
             else:

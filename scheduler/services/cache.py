@@ -31,6 +31,17 @@ def build_public_asset_url(asset: MediaAsset) -> str:
     return base + path.lstrip("/")
 
 
+def _drive_fingerprint(metadata: dict, fallback: dict) -> str:
+    parts = [
+        metadata.get("modifiedTime", ""),
+        metadata.get("md5Checksum", ""),
+        metadata.get("size", fallback.get("size", "")),
+        metadata.get("mimeType", fallback.get("mimeType", "")),
+        metadata.get("name", fallback.get("name", "")),
+    ]
+    return "|".join(str(part or "") for part in parts)
+
+
 def ensure_cached_asset(target: PublishingTarget, file_obj: dict, variant: str = "default") -> MediaAsset:
     asset, created = MediaAsset.objects.get_or_create(
         target=target,
@@ -43,13 +54,21 @@ def ensure_cached_asset(target: PublishingTarget, file_obj: dict, variant: str =
         },
     )
 
+    metadata = get_drive_file_metadata(file_obj["id"])
+    source_fingerprint = _drive_fingerprint(metadata, file_obj)
+
     # Skip re-download if asset is already cached and the local file exists.
     if not created and asset.status == MediaAsset.STATUS_READY and asset.local_path:
         local_path = Path(asset.local_path)
-        if local_path.exists() and asset.file_size and local_path.stat().st_size == asset.file_size:
+        fingerprint_matches = not asset.source_fingerprint or asset.source_fingerprint == source_fingerprint
+        if (
+            fingerprint_matches
+            and local_path.exists()
+            and asset.file_size
+            and local_path.stat().st_size == asset.file_size
+        ):
             return asset
 
-    metadata = get_drive_file_metadata(file_obj["id"])
     cache_root = _cache_dir()
     raw_bytes = download_drive_file(file_obj["id"])
     source_mime = metadata.get("mimeType", file_obj.get("mimeType", "application/octet-stream"))
@@ -70,6 +89,9 @@ def ensure_cached_asset(target: PublishingTarget, file_obj: dict, variant: str =
     asset.public_filename = public_filename
     asset.local_path = str(local_path)
     asset.source_mime_type = source_mime
+    asset.drive_modified_time = str(metadata.get("modifiedTime", ""))
+    asset.drive_checksum = str(metadata.get("md5Checksum", ""))
+    asset.source_fingerprint = source_fingerprint
     asset.content_type = content_type
     asset.file_size = len(raw_bytes)
     asset.status = MediaAsset.STATUS_READY

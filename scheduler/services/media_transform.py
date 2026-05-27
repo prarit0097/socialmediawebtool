@@ -75,4 +75,4 @@ def build_instagram_ready_image(raw_bytes: bytes) -> bytes:
         if len(data) <= INSTAGRAM_IMAGE_MAX_BYTES:
             return data
         quality -= 5
-    return data
+    raise ValueError("Instagram image transform could not produce a JPEG under 8 MB.")

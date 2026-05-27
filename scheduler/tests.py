@@ -12,7 +12,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .forms import PublishingTargetForm
-from .models import MetaCredential, PostLog, PublishingTarget, SocialAccount
+from .models import MediaAsset, MetaCredential, PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
 from .services.diagnostics import build_rejection_diagnostics
 from .services.ai import _build_model_candidates, _clean_media_name_context, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.compliance import evaluate_publish_readiness
@@ -20,7 +20,7 @@ from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.metrics import fetch_facebook_metrics, iter_tool_post_metrics
 from .services.media_transform import build_instagram_ready_image
-from .services.publishing import PublishingError, _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets, publish_platform
+from .services.publishing import PublishingError, _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, _wait_for_instagram_container, build_caption, get_daily_slots, pick_next_shared_file, publish_due_targets, publish_platform
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 from .services.telegram import TELEGRAM_MESSAGE_MAX_LENGTH, _split_telegram_message, build_daily_report_message
 
@@ -491,12 +491,13 @@ class SchedulingTest(TestCase):
         target.post_logs.create(platform="instagram", scheduled_for=slots[0], status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
         self.assertTrue(_slot_is_complete(target, slots[0], {"facebook", "instagram"}))
 
-        with patch("scheduler.services.publishing.publish_target") as publish_target_mock:
+        with patch("scheduler.services.publishing.process_scheduled_run", return_value="success") as process_mock:
             publish_due_targets(reference_time=slots[1])
-        publish_target_mock.assert_called_once_with(target, scheduled_for=slots[1])
+        process_mock.assert_called_once()
+        self.assertEqual(timezone.localtime(process_mock.call_args.args[0].scheduled_for), slots[1])
 
-    @override_settings(SCHEDULER_CATCHUP_MINUTES=60)
-    def test_due_runner_ignores_old_missed_slots_outside_catchup_window(self):
+    @override_settings(SCHEDULER_CATCHUP_MINUTES=60, SCHEDULER_BACKLOG_DAYS=2)
+    def test_due_runner_recovers_old_missed_slots_inside_backlog_window(self):
         from unittest.mock import patch
         from django.utils import timezone
 
@@ -515,10 +516,12 @@ class SchedulingTest(TestCase):
         )
         reference_time = timezone.make_aware(datetime.strptime("2026-03-22 16:30", "%Y-%m-%d %H:%M"))
 
-        with patch("scheduler.services.publishing.publish_target") as publish_target_mock:
+        with patch("scheduler.services.publishing.process_scheduled_run", return_value="success") as process_mock:
             result = publish_due_targets(reference_time=reference_time)
-        publish_target_mock.assert_not_called()
-        self.assertEqual(result["success"], 0)
+        process_mock.assert_called_once()
+        self.assertEqual(timezone.localtime(process_mock.call_args.args[0].scheduled_for).strftime("%H:%M"), "09:00")
+        self.assertEqual(result["success"], 1)
+        self.assertTrue(target.scheduled_runs.filter(scheduled_for__hour=9, status=ScheduledPostRun.STATUS_RUNNING).exists())
 
     @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90)
     def test_due_runner_counts_backoff_as_skipped_without_duplicate_log(self):
@@ -554,6 +557,9 @@ class SchedulingTest(TestCase):
         self.assertEqual(result["skipped"], 1)
         self.assertEqual(result["backoff"], 1)
         self.assertEqual(target.post_logs.count(), 1)
+        run = target.scheduled_runs.get()
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_BACKOFF)
+        self.assertIn("Meta transient backoff", run.last_error)
         target.refresh_from_db()
         self.assertEqual(target.last_status, "backoff")
 
@@ -585,6 +591,7 @@ class SchedulingTest(TestCase):
         self.assertEqual(result["failed"], 0)
         self.assertEqual(result["skipped"], 1)
         self.assertEqual(result["content_exhausted"], 1)
+        self.assertEqual(target.scheduled_runs.get().status, ScheduledPostRun.STATUS_SKIPPED)
         target.refresh_from_db()
         self.assertEqual(target.last_status, "content_exhausted")
 
@@ -1335,6 +1342,50 @@ class ComplianceTest(TestCase):
         self.assertFalse(result.is_blocked)
         self.assertIn("temporary tunnel host", " | ".join(result.warnings))
 
+    def test_facebook_publish_requires_page_access_token(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="broad-token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb-no-token", name="FB", access_token="")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:no-page-token",
+            display_name="FB No Page Token",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+
+        result = evaluate_publish_readiness(
+            target,
+            "facebook",
+            {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "1000"},
+            "Caption",
+        )
+
+        self.assertTrue(result.is_blocked)
+        self.assertIn("Page access token", " | ".join(result.blocking_issues))
+
+    def test_facebook_photo_over_10mb_fails_preflight(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb-big", name="FB", access_token="page-token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:big-photo",
+            display_name="FB Big Photo",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+
+        result = evaluate_publish_readiness(
+            target,
+            "facebook",
+            {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": str(10 * 1024 * 1024 + 1)},
+            "Caption",
+        )
+
+        self.assertTrue(result.is_blocked)
+        self.assertIn("10 MB", " | ".join(result.blocking_issues))
+
 
 class HealthTest(TestCase):
     def setUp(self):
@@ -1549,6 +1600,49 @@ class MediaTransformTest(TestCase):
         self.assertEqual(converted.format, "JPEG")
         self.assertLessEqual(max(converted.size), 1440)
 
+    def test_instagram_ready_image_fails_when_jpeg_cannot_fit_under_limit(self):
+        from unittest.mock import patch
+
+        image = Image.new("RGB", (800, 800), color=(25, 50, 75))
+        source = BytesIO()
+        image.save(source, format="PNG")
+
+        with patch("scheduler.services.media_transform.INSTAGRAM_IMAGE_MAX_BYTES", 1):
+            with self.assertRaisesMessage(ValueError, "under 8 MB"):
+                build_instagram_ready_image(source.getvalue())
+
+
+class MediaCacheTest(TestCase):
+    def test_cached_asset_refreshes_when_drive_fingerprint_changes(self):
+        from unittest.mock import patch
+        from .services.cache import ensure_cached_asset
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="cache:fingerprint",
+            display_name="Cache Fingerprint",
+            drive_folder_id="folder",
+        )
+        file_obj = {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "5"}
+
+        with tempfile.TemporaryDirectory() as temp_dir, override_settings(MEDIA_CACHE_DIR=temp_dir):
+            with patch(
+                "scheduler.services.cache.get_drive_file_metadata",
+                side_effect=[
+                    {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "5", "modifiedTime": "one"},
+                    {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "6", "modifiedTime": "two"},
+                ],
+            ), patch("scheduler.services.cache.download_drive_file", side_effect=[b"first", b"second"]) as download_mock:
+                first = ensure_cached_asset(target, file_obj)
+                second = ensure_cached_asset(target, file_obj)
+
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(download_mock.call_count, 2)
+        second.refresh_from_db()
+        self.assertEqual(second.source_fingerprint.split("|")[0], "two")
+        self.assertEqual(second.file_size, 6)
+
 
 class InstagramPublishTest(TestCase):
     def test_publishing_graph_get_reports_meta_error_details(self):
@@ -1596,7 +1690,9 @@ class InstagramPublishTest(TestCase):
         )
         file_obj = {"id": "file1", "name": "POST15.jpeg", "mimeType": "image/jpeg"}
 
-        with patch("scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST15.jpg"]), patch(
+        with patch("scheduler.services.publishing._check_instagram_content_publishing_limit"), patch(
+            "scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST15.jpg"]
+        ), patch(
             "scheduler.services.publishing._graph_post",
             side_effect=[{"id": "container-1"}, {"id": "publish-1"}],
         ) as graph_post_mock, patch("scheduler.services.publishing._wait_for_instagram_container") as wait_mock:
@@ -1623,7 +1719,9 @@ class InstagramPublishTest(TestCase):
         )
         file_obj = {"id": "file1", "name": "POST16.mp4", "mimeType": "video/mp4"}
 
-        with patch("scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST16.mp4"]), patch(
+        with patch("scheduler.services.publishing._check_instagram_content_publishing_limit"), patch(
+            "scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST16.mp4"]
+        ), patch(
             "scheduler.services.publishing._graph_post",
             side_effect=[{"id": "container-1"}, {"id": "publish-1"}],
         ) as graph_post_mock, patch(
@@ -1634,7 +1732,7 @@ class InstagramPublishTest(TestCase):
 
         self.assertEqual(result, "publish-1")
         wait_mock.assert_called_once_with("container-1", "page-token")
-        sleep_mock.assert_called_once()
+        sleep_mock.assert_not_called()
         self.assertEqual(graph_post_mock.call_count, 2)
         self.assertEqual(graph_post_mock.call_args.args[0], "/ig1/media_publish")
 
@@ -1655,7 +1753,9 @@ class InstagramPublishTest(TestCase):
         )
         file_obj = {"id": "file1", "name": "POST17.mp4", "mimeType": "video/mp4"}
 
-        with patch("scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST17.mp4"]), patch(
+        with patch("scheduler.services.publishing._check_instagram_content_publishing_limit"), patch(
+            "scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST17.mp4"]
+        ), patch(
             "scheduler.services.publishing._graph_post",
             side_effect=[
                 {"id": "container-1"},
@@ -1670,7 +1770,46 @@ class InstagramPublishTest(TestCase):
 
         self.assertEqual(result, "publish-1")
         self.assertEqual(graph_post_mock.call_count, 3)
-        self.assertEqual(sleep_mock.call_count, 2)
+        self.assertEqual(sleep_mock.call_count, 1)
+
+    def test_instagram_content_publishing_limit_blocks_before_container_creation(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig-limit", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:limit",
+            display_name="IG Limit",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+
+        with patch(
+            "scheduler.services.publishing._graph_get",
+            return_value={"data": [{"quota_usage": 100, "config": {"quota_total": 100}}]},
+        ), patch("scheduler.services.publishing._graph_post") as graph_post_mock:
+            with self.assertRaisesMessage(PublishingError, "content publishing limit"):
+                _publish_to_instagram(target, {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg"})
+
+        graph_post_mock.assert_not_called()
+
+    def test_instagram_container_wait_handles_terminal_statuses(self):
+        from unittest.mock import patch
+
+        with patch("scheduler.services.publishing._graph_get", return_value={"status_code": "FINISHED"}), patch(
+            "scheduler.services.publishing.time.sleep"
+        ) as sleep_mock:
+            _wait_for_instagram_container("container", "token")
+
+        sleep_mock.assert_not_called()
+
+        with patch("scheduler.services.publishing._graph_get", return_value={"status_code": "ERROR"}):
+            with self.assertRaisesMessage(PublishingError, "status ERROR"):
+                _wait_for_instagram_container("container", "token")
 
     @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90)
     def test_recent_meta_rate_limit_failure_skips_instagram_retry_without_meta_call(self):

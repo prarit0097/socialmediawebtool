@@ -82,7 +82,8 @@ class Command(BaseCommand):
                     f"Scheduler heartbeat {result['checked_at']}: "
                     f"checked={result['checked_targets']} success={result['success']} "
                     f"failed={result['failed']} skipped={result['skipped']} "
-                    f"backoff={result['backoff']} content_exhausted={result['content_exhausted']}"
+                    f"backoff={result['backoff']} content_exhausted={result['content_exhausted']} "
+                    f"misconfigured={result.get('misconfigured', 0)} processed_runs={result.get('processed_runs', 0)}"
                 )
             )
             if _should_send_daily_report(now):
