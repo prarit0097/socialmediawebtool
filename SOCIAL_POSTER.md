@@ -423,3 +423,5 @@ systemctl status socialposter-scheduler.service --no-pager
   journalctl -u socialposter-scheduler.service -n 80 --no-pager -l
   ```
 - Tests 78 tak update hue, covering backlog recovery, scheduled-run backoff visibility, content exhaustion state, Facebook/Instagram preflights, Instagram polling terminals, and Drive cache fingerprint refresh.
+- Instagram duplicate-container hardening add hua. Agar Meta container create hone ke baad status/publish uncertain failure aaye, failed `PostLog` me container ID save hota hai; next retry same container ko publish karne ki koshish karega, new duplicate container create nahi karega.
+- Riims jaise case me Facebook repeat nahi hota agar same Drive file ka Facebook success already DB me hai. Same-file queue ka intent yehi hai: pending platform complete karna, already-success platform ko dobara post nahi karna.

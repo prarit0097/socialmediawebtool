@@ -36,6 +36,12 @@ class PublishBackoff(PublishingError):
     pass
 
 
+class InstagramContainerError(PublishingError):
+    def __init__(self, message: str, container_id: str = ""):
+        super().__init__(message)
+        self.container_id = container_id
+
+
 RATE_LIMIT_MARKERS = (
     "application request limit reached",
     "rate limit",
@@ -55,6 +61,7 @@ TRANSIENT_BACKOFF_MARKERS = (
     "timeout",
     "temporarily unavailable",
     "instagram status polling failed after container creation",
+    "instagram container publish state is uncertain",
 )
 CONTENT_EXHAUSTED_MARKERS = (
     "all unique media files",
@@ -644,25 +651,68 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
             else:
                 payload["image_url"] = media_url
 
+            prior_container_id = _latest_uncertain_instagram_container_id(target, file_obj["id"])
+            if prior_container_id:
+                publish = _publish_instagram_container_with_retry(
+                    target.instagram_account.external_id,
+                    prior_container_id,
+                    token,
+                    wait_error=PublishingError("Retrying existing uncertain Instagram container."),
+                )
+                return publish.get("id") or prior_container_id
+
             creation = _graph_post(f"/{target.instagram_account.external_id}/media", token, payload)
             container_id = creation.get("id", "")
             try:
                 _wait_for_instagram_container(container_id, token)
             except PublishingError as exc:
                 if not _is_instagram_status_poll_auth_error(exc):
-                    raise
-                publish = _publish_instagram_container_with_retry(
-                    target.instagram_account.external_id,
-                    container_id,
-                    token,
-                    wait_error=exc,
-                )
+                    raise InstagramContainerError(str(exc), container_id=container_id)
+                try:
+                    publish = _publish_instagram_container_with_retry(
+                        target.instagram_account.external_id,
+                        container_id,
+                        token,
+                        wait_error=exc,
+                    )
+                    return publish.get("id") or container_id
+                except PublishingError as publish_exc:
+                    raise InstagramContainerError(str(publish_exc), container_id=container_id)
+            try:
+                publish = _publish_instagram_container(target.instagram_account.external_id, container_id, token)
                 return publish.get("id") or container_id
-            publish = _publish_instagram_container(target.instagram_account.external_id, container_id, token)
-            return publish.get("id") or container_id
+            except PublishingError as exc:
+                raise InstagramContainerError(str(exc), container_id=container_id)
+        except InstagramContainerError as exc:
+            errors.append(f"{media_url} -> {exc}")
+            raise
         except PublishingError as exc:
             errors.append(f"{media_url} -> {exc}")
     raise PublishingError("Instagram publish failed for all tested public URLs: " + " | ".join(errors))
+
+
+def _latest_uncertain_instagram_container_id(target: PublishingTarget, drive_file_id: str) -> str:
+    if not drive_file_id:
+        return ""
+    since = timezone.now() - timedelta(hours=24)
+    row = (
+        target.post_logs.filter(
+            platform=SocialAccount.INSTAGRAM,
+            drive_file_id=drive_file_id,
+            status=PostLog.STATUS_FAILED,
+            created_at__gte=since,
+        )
+        .exclude(meta_creation_id="")
+        .order_by("-created_at")
+        .values("meta_creation_id", "message")
+        .first()
+    )
+    if not row:
+        return ""
+    message = (row.get("message") or "").lower()
+    if "after container creation" in message or "container publish state is uncertain" in message:
+        return row.get("meta_creation_id") or ""
+    return ""
 
 
 def _publish_instagram_container(instagram_account_id: str, container_id: str, access_token: str) -> dict:
@@ -774,8 +824,16 @@ def publish_platform(
         log.save()
     except Exception as exc:
         log.status = PostLog.STATUS_FAILED
+        if isinstance(exc, InstagramContainerError) and exc.container_id:
+            log.meta_creation_id = exc.container_id
         warning_suffix = f" | Preflight warnings: {' ; '.join(compliance.warnings)}" if compliance.warnings else ""
-        log.message = build_rejection_diagnostics(platform, file_obj, str(exc)) + warning_suffix
+        uncertain_suffix = ""
+        if isinstance(exc, InstagramContainerError) and exc.container_id:
+            uncertain_suffix = (
+                " | Instagram container publish state is uncertain; the next retry will reuse "
+                f"container {exc.container_id} instead of creating a duplicate container."
+            )
+        log.message = build_rejection_diagnostics(platform, file_obj, str(exc)) + uncertain_suffix + warning_suffix
         log.save()
         raise
 

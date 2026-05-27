@@ -1772,6 +1772,72 @@ class InstagramPublishTest(TestCase):
         self.assertEqual(graph_post_mock.call_count, 3)
         self.assertEqual(sleep_mock.call_count, 1)
 
+    def test_instagram_publish_reuses_recent_uncertain_container_before_creating_new_one(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig1", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:reuse-container",
+            display_name="IG Reuse Container",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file1", "name": "POST17.mp4", "mimeType": "video/mp4"}
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=timezone.now(),
+            status=PostLog.STATUS_FAILED,
+            drive_file_id=file_obj["id"],
+            drive_file_name=file_obj["name"],
+            meta_creation_id="container-old",
+            message="Instagram status polling failed after container creation.",
+        )
+
+        with patch("scheduler.services.publishing._check_instagram_content_publishing_limit"), patch(
+            "scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST17.mp4"]
+        ), patch("scheduler.services.publishing._graph_post", return_value={"id": "publish-1"}) as graph_post_mock:
+            result = _publish_to_instagram(target, file_obj)
+
+        self.assertEqual(result, "publish-1")
+        graph_post_mock.assert_called_once()
+        self.assertEqual(graph_post_mock.call_args.args[0], "/ig1/media_publish")
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://example.com")
+    def test_publish_platform_records_uncertain_instagram_container_id_on_failure(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig-record", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:record-container",
+            display_name="IG Record Container",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file-record", "name": "POST18.jpeg", "mimeType": "image/jpeg"}
+
+        with patch("scheduler.services.publishing._check_instagram_content_publishing_limit"), patch(
+            "scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST18.jpg"]
+        ), patch("scheduler.services.publishing._wait_for_instagram_container"), patch(
+            "scheduler.services.publishing._graph_post",
+            side_effect=[{"id": "container-new"}, PublishingError("Media ID is not available")],
+        ):
+            with self.assertRaises(PublishingError):
+                publish_platform(target, SocialAccount.INSTAGRAM, file_obj=file_obj)
+
+        log = target.post_logs.get(platform=SocialAccount.INSTAGRAM)
+        self.assertEqual(log.meta_creation_id, "container-new")
+        self.assertIn("publish state is uncertain", log.message)
+
     def test_instagram_content_publishing_limit_blocks_before_container_creation(self):
         from unittest.mock import patch
 
