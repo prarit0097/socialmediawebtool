@@ -425,3 +425,8 @@ systemctl status socialposter-scheduler.service --no-pager
 - Tests 78 tak update hue, covering backlog recovery, scheduled-run backoff visibility, content exhaustion state, Facebook/Instagram preflights, Instagram polling terminals, and Drive cache fingerprint refresh.
 - Instagram duplicate-container hardening add hua. Agar Meta container create hone ke baad status/publish uncertain failure aaye, failed `PostLog` me container ID save hota hai; next retry same container ko publish karne ki koshish karega, new duplicate container create nahi karega.
 - Riims jaise case me Facebook repeat nahi hota agar same Drive file ka Facebook success already DB me hai. Same-file queue ka intent yehi hai: pending platform complete karna, already-success platform ko dobara post nahi karna.
+2026-05-28
+- Backoff retry scheduling bug fix hua. Pehle scheduler recent Meta backoff ko detect karke `next_retry_at` ko current tick + full cooldown set kar sakta tha, jisse 24h app-limit cooldown har retry par extend hota rehta tha. Ab `PublishBackoff` original failed `PostLog.created_at + configured cooldown` carry karta hai, aur scheduled run wahi expiry use karta hai.
+- Synthetic backoff messages (`Meta rate limit backoff active...`) ko ab fresh Meta failure nahi maana jata, taaki derived scheduler messages cooldown source na ban sakein.
+- Same credential/platform par newer real Instagram success milne par older credential-level app-rate-limit backoff ignore hota hai. Manual reconciliation rows (`manual-*`) intentionally cooldown clear nahi karti, kyunki wo Meta API recovery prove nahi karti.
+- Tests 83 tak update hue, including original-failure expiry, real-success cooldown clear, aur synthetic backoff regression coverage.

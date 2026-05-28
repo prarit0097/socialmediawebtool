@@ -33,7 +33,9 @@ class PublishingError(Exception):
 
 
 class PublishBackoff(PublishingError):
-    pass
+    def __init__(self, message: str, retry_at=None):
+        super().__init__(message)
+        self.retry_at = retry_at
 
 
 class InstagramContainerError(PublishingError):
@@ -123,11 +125,18 @@ def _app_rate_limit_backoff_minutes() -> int:
 
 
 def _backoff_minutes_for_failure(message: str) -> int:
+    if _is_synthetic_backoff_message(message):
+        return 0
     if _is_meta_rate_limit_error(message):
         return _app_rate_limit_backoff_minutes()
     if _is_transient_backoff_error(message):
         return settings.META_RATE_LIMIT_BACKOFF_MINUTES
     return 0
+
+
+def _is_synthetic_backoff_message(message: str) -> bool:
+    text = (message or "").lower()
+    return text.startswith("meta rate limit backoff active") or text.startswith("meta transient backoff active")
 
 
 def _format_graph_error(data: dict, fallback_text: str = "") -> str:
@@ -165,9 +174,9 @@ def _backoff_message_for_failure(message: str, scope: str = "target/platform/fil
     return ""
 
 
-def recent_backoff_message(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
+def _recent_backoff(target: PublishingTarget, platform: str, drive_file_id: str) -> tuple[str, object | None]:
     if not drive_file_id:
-        return ""
+        return "", None
     now = timezone.now()
     since = now - timedelta(minutes=max(settings.META_RATE_LIMIT_BACKOFF_MINUTES, _app_rate_limit_backoff_minutes()))
     recent_messages = (
@@ -187,13 +196,27 @@ def recent_backoff_message(target: PublishingTarget, platform: str, drive_file_i
             continue
         backoff_message = _backoff_message_for_failure(message)
         if backoff_message:
-            return backoff_message
-    return ""
+            return backoff_message, created_at + timedelta(minutes=backoff_minutes)
+    return "", None
 
 
-def recent_credential_backoff_message(target: PublishingTarget, platform: str) -> str:
+def recent_backoff_message(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
+    message, _retry_at = _recent_backoff(target, platform, drive_file_id)
+    return message
+
+
+def _latest_real_success_after_credential_failure(target: PublishingTarget, platform: str, created_at) -> bool:
+    return PostLog.objects.filter(
+        target__credential=target.credential,
+        platform=platform,
+        status=PostLog.STATUS_SUCCESS,
+        created_at__gt=created_at,
+    ).exclude(meta_creation_id__startswith="manual-").exists()
+
+
+def _recent_credential_backoff(target: PublishingTarget, platform: str) -> tuple[str, object | None]:
     if not target.credential_id:
-        return ""
+        return "", None
     now = timezone.now()
     since = now - timedelta(minutes=_app_rate_limit_backoff_minutes())
     recent_messages = (
@@ -213,8 +236,15 @@ def recent_credential_backoff_message(target: PublishingTarget, platform: str) -
         backoff_minutes = _backoff_minutes_for_failure(message)
         if not backoff_minutes or created_at < now - timedelta(minutes=backoff_minutes):
             continue
-        return _backoff_message_for_failure(message, scope="credential/platform")
-    return ""
+        if _latest_real_success_after_credential_failure(target, platform, created_at):
+            continue
+        return _backoff_message_for_failure(message, scope="credential/platform"), created_at + timedelta(minutes=backoff_minutes)
+    return "", None
+
+
+def recent_credential_backoff_message(target: PublishingTarget, platform: str) -> str:
+    message, _retry_at = _recent_credential_backoff(target, platform)
+    return message
 
 
 def _request_with_retries(method: str, url: str, **kwargs):
@@ -796,11 +826,11 @@ def publish_platform(
     file_obj = file_obj or _get_slot_locked_file(target, scheduled_for)
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
         return
-    backoff_message = recent_backoff_message(target, platform, file_obj["id"])
+    backoff_message, retry_at = _recent_backoff(target, platform, file_obj["id"])
     if not backoff_message:
-        backoff_message = recent_credential_backoff_message(target, platform)
+        backoff_message, retry_at = _recent_credential_backoff(target, platform)
     if backoff_message:
-        raise PublishBackoff(backoff_message)
+        raise PublishBackoff(backoff_message, retry_at=retry_at)
     caption = build_caption(target, file_obj=file_obj)
     compliance = evaluate_publish_readiness(target, platform, file_obj, caption)
     if compliance.is_blocked:
@@ -946,6 +976,7 @@ def process_scheduled_run(run: ScheduledPostRun, now=None) -> str:
     statuses = dict(run.platform_status or {})
     failures: list[str] = []
     backoffs: list[str] = []
+    retry_times = []
     published_any = False
 
     for platform in active_platforms:
@@ -959,6 +990,8 @@ def process_scheduled_run(run: ScheduledPostRun, now=None) -> str:
         except PublishBackoff as exc:
             statuses[platform] = ScheduledPostRun.STATUS_BACKOFF
             backoffs.append(f"{platform}: {exc}")
+            if exc.retry_at:
+                retry_times.append(exc.retry_at)
         except Exception as exc:
             statuses[platform] = PostLog.STATUS_FAILED
             failures.append(f"{platform}: {exc}")
@@ -978,7 +1011,7 @@ def process_scheduled_run(run: ScheduledPostRun, now=None) -> str:
         outcome = "success" if published_any else "complete"
     elif backoffs or retry_minutes:
         run.status = ScheduledPostRun.STATUS_BACKOFF
-        run.next_retry_at = now + timedelta(minutes=retry_minutes or settings.META_RATE_LIMIT_BACKOFF_MINUTES)
+        run.next_retry_at = max(retry_times) if retry_times else now + timedelta(minutes=retry_minutes or settings.META_RATE_LIMIT_BACKOFF_MINUTES)
         run.last_error = " | ".join(messages)
         target.last_status = "backoff"
         target.last_error = run.last_error
