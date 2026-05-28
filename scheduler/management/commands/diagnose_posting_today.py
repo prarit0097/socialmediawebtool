@@ -66,7 +66,7 @@ class Command(BaseCommand):
             for row in run_summary:
                 self._safe_write(f"  {row['status']}: {row['count']}")
         else:
-            self._safe_write("Today scheduled-run summary: no ScheduledPostRun rows created today.")
+            self._safe_write("Today scheduled-run summary: no ScheduledPostRun rows scheduled for today.")
 
         if not targets.exists():
             self._safe_write("No matching active targets.")
@@ -85,7 +85,20 @@ class Command(BaseCommand):
             target_runs = list(
                 today_runs.filter(target=target)
                 .order_by("scheduled_for")
-                .values("scheduled_for", "status", "drive_file_name", "last_error")[:6]
+                .values(
+                    "id",
+                    "scheduled_for",
+                    "status",
+                    "drive_file_id",
+                    "drive_file_name",
+                    "drive_mime_type",
+                    "platform_status",
+                    "next_retry_at",
+                    "attempt_count",
+                    "lock_owner",
+                    "locked_at",
+                    "last_error",
+                )[:6]
             )
 
             self._safe_write("")
@@ -116,11 +129,18 @@ class Command(BaseCommand):
                 self._safe_write("  scheduled_runs:")
                 for run in target_runs:
                     when = timezone.localtime(run["scheduled_for"]).strftime("%H:%M")
+                    retry_at = timezone.localtime(run["next_retry_at"]).strftime("%Y-%m-%d %H:%M:%S %Z") if run["next_retry_at"] else "-"
+                    locked_at = timezone.localtime(run["locked_at"]).strftime("%H:%M:%S") if run["locked_at"] else "-"
+                    platform_status = ", ".join(f"{key}={value}" for key, value in (run["platform_status"] or {}).items()) or "-"
                     reason = (run["last_error"] or "").replace("\n", " ")[:180]
                     self._safe_write(
-                        f"    {when} {run['status']} {run['drive_file_name'] or '-'}"
-                        f"{' :: ' + reason if reason else ''}"
+                        f"    {when} {run['status']} run#{run['id']} {run['drive_file_name'] or '-'} "
+                        f"id={run['drive_file_id'] or '-'} mime={run['drive_mime_type'] or '-'}"
                     )
+                    self._safe_write(f"      platforms: {platform_status}")
+                    self._safe_write(f"      next_retry_at: {retry_at} attempts={run['attempt_count']} lock={run['lock_owner'] or 'none'} since={locked_at}")
+                    if reason:
+                        self._safe_write(f"      reason: {reason}")
             if health["content_exhausted"]:
                 self._safe_write("  blocker: content exhausted; add new Drive media files.")
             if not target.drive_folder_id:

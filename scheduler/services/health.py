@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Q
 from django.utils import timezone
 
 from scheduler.models import PostLog, PublishingTarget, ScheduledPostRun
@@ -14,14 +16,74 @@ from scheduler.services.proxy import is_public_base_ready
 
 def _cache_key(target: PublishingTarget) -> str:
     latest_log_id = target.post_logs.order_by("-created_at").values_list("id", flat=True).first() or 0
-    latest_run_id = target.scheduled_runs.order_by("-updated_at").values_list("id", flat=True).first() or 0
-    return f"target-health:{target.pk}:{int(target.updated_at.timestamp())}:{latest_log_id}:{latest_run_id}"
+    latest_run_updated = target.scheduled_runs.order_by("-updated_at").values_list("updated_at", flat=True).first()
+    latest_asset_updated = target.media_assets.order_by("-updated_at").values_list("updated_at", flat=True).first()
+    latest_run_stamp = latest_run_updated.isoformat() if latest_run_updated else "0"
+    latest_asset_stamp = latest_asset_updated.isoformat() if latest_asset_updated else "0"
+    target_stamp = target.updated_at.isoformat()
+    return f"target-health:{target.pk}:{target_stamp}:{latest_log_id}:{latest_run_stamp}:{latest_asset_stamp}"
 
 
 def _caption_matches_filename(caption: str, file_name: str) -> bool:
     normalized_caption = " ".join((caption or "").strip().lower().split())
     normalized_stem = " ".join(Path(file_name or "").stem.strip().lower().split())
     return bool(normalized_caption and normalized_stem and normalized_caption == normalized_stem)
+
+
+def _health_backlog_start(now) -> datetime:
+    local_now = timezone.localtime(now)
+    backlog_days = max(int(getattr(settings, "SCHEDULER_BACKLOG_DAYS", 2)), 1)
+    start_date = local_now.date() - timedelta(days=backlog_days - 1)
+    return timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
+
+
+def _current_run(target: PublishingTarget, now=None):
+    now = timezone.localtime(now or timezone.now())
+    stale_lock_before = now - timedelta(minutes=30)
+    return (
+        target.scheduled_runs.filter(scheduled_for__lte=now, scheduled_for__gte=_health_backlog_start(now))
+        .filter(
+            Q(
+                status__in=[
+                    ScheduledPostRun.STATUS_PENDING,
+                    ScheduledPostRun.STATUS_BACKOFF,
+                    ScheduledPostRun.STATUS_PARTIAL_SUCCESS,
+                ]
+            )
+            | Q(status=ScheduledPostRun.STATUS_RUNNING, locked_at__lt=stale_lock_before)
+        )
+        .filter(Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=now))
+        .exclude(drive_file_id="")
+        .order_by("scheduled_for", "updated_at")
+        .first()
+    )
+
+
+def _run_file(run: ScheduledPostRun) -> dict:
+    return {
+        "id": run.drive_file_id,
+        "name": run.drive_file_name or "unknown",
+        "mimeType": run.drive_mime_type or "unknown",
+    }
+
+
+def _serialize_run(run: ScheduledPostRun | None) -> dict | None:
+    if not run:
+        return None
+    return {
+        "id": run.id,
+        "scheduled_for": run.scheduled_for,
+        "status": run.status,
+        "platform_status": dict(run.platform_status or {}),
+        "drive_file_id": run.drive_file_id,
+        "drive_file_name": run.drive_file_name,
+        "drive_mime_type": run.drive_mime_type,
+        "next_retry_at": run.next_retry_at,
+        "attempt_count": run.attempt_count,
+        "lock_owner": run.lock_owner,
+        "locked_at": run.locked_at,
+        "last_error": run.last_error,
+    }
 
 
 def build_target_health(target: PublishingTarget) -> dict:
@@ -36,6 +98,8 @@ def build_target_health(target: PublishingTarget) -> dict:
     caption_found = False
     media_files = []
     current_file = None
+    current_file_source = ""
+    current_run = None
     pending_platforms = []
     backoff_messages = []
     content_exhausted = False
@@ -87,12 +151,26 @@ def build_target_health(target: PublishingTarget) -> dict:
             success_map = {}
             for row in success_rows:
                 success_map.setdefault(row["drive_file_id"], set()).add(row["platform"])
-            for file_obj in media_files:
-                succeeded = success_map.get(file_obj["id"], set())
-                if set(active_platforms) and succeeded != set(active_platforms):
-                    current_file = file_obj
-                    pending_platforms = sorted(set(active_platforms) - succeeded)
-                    break
+            current_run = _current_run(target)
+            if current_run:
+                current_file = _run_file(current_run)
+                current_file_source = "scheduled_run"
+                status_map = dict(current_run.platform_status or {})
+                succeeded = {platform for platform, status in status_map.items() if status == PostLog.STATUS_SUCCESS}
+                succeeded.update(success_map.get(current_run.drive_file_id, set()))
+                pending_platforms = sorted(set(active_platforms) - succeeded)
+                if not pending_platforms:
+                    current_run = None
+                    current_file = None
+                    current_file_source = ""
+            if current_run is None:
+                for file_obj in media_files:
+                    succeeded = success_map.get(file_obj["id"], set())
+                    if set(active_platforms) and succeeded != set(active_platforms):
+                        current_file = file_obj
+                        current_file_source = "drive_scan"
+                        pending_platforms = sorted(set(active_platforms) - succeeded)
+                        break
             if media_files and active_platforms and current_file is None:
                 content_exhausted = True
                 issues.append("All unique media files have already succeeded on every active platform. Add new files to continue posting.")
@@ -136,10 +214,6 @@ def build_target_health(target: PublishingTarget) -> dict:
         .values("platform", "drive_file_name", "message", "created_at")
         .first()
     )
-    overall = "ready" if not issues else "warning"
-    if any(log["status"] == PostLog.STATUS_FAILED for log in latest_logs):
-        overall = "warning"
-
     due_slots = []
     next_upcoming_slot = None
     try:
@@ -160,8 +234,13 @@ def build_target_health(target: PublishingTarget) -> dict:
                 if next_upcoming_slot is None:
                     next_upcoming_slot = slot
             due_slots.append({"slot": slot, "status": slot_status})
-    except Exception:
+    except Exception as exc:
+        issues.append(f"Schedule status unavailable: {exc}")
         due_slots = []
+
+    overall = "ready" if not issues else "warning"
+    if any(log["status"] == PostLog.STATUS_FAILED for log in latest_logs):
+        overall = "warning"
 
     health = {
         "overall": overall,
@@ -175,6 +254,8 @@ def build_target_health(target: PublishingTarget) -> dict:
         "latest_failure": latest_failure,
         "active_platforms": [platform for platform in ("facebook", "instagram") if getattr(target, f"{platform}_account_id", None)],
         "current_file": current_file,
+        "current_file_source": current_file_source,
+        "current_run": _serialize_run(current_run),
         "pending_platforms": pending_platforms,
         "backoff_messages": backoff_messages,
         "content_exhausted": content_exhausted,

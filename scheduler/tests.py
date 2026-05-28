@@ -1,6 +1,7 @@
 import base64
 from datetime import datetime, time, timedelta
 from io import BytesIO, StringIO
+from pathlib import Path
 import tempfile
 
 from PIL import Image
@@ -32,7 +33,7 @@ class DriveHelpersTest(TestCase):
 
     def test_list_folder_files_handles_pagination(self):
         from unittest.mock import MagicMock, patch
-        from .services.drive import list_folder_files
+        from .services.drive import DRIVE_LIST_FILE_FIELDS, list_folder_files
 
         service = MagicMock()
         files_resource = MagicMock()
@@ -48,6 +49,23 @@ class DriveHelpersTest(TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["id"], "1")
         self.assertEqual(result[1]["id"], "2")
+        fields_arg = files_resource.list.call_args.kwargs["fields"]
+        self.assertEqual(fields_arg, f"nextPageToken,files({DRIVE_LIST_FILE_FIELDS})")
+
+    def test_get_drive_file_metadata_requests_cache_fingerprint_fields(self):
+        from unittest.mock import MagicMock, patch
+        from .services.drive import DRIVE_FILE_FIELDS, get_drive_file_metadata
+
+        service = MagicMock()
+        files_resource = MagicMock()
+        service.files.return_value = files_resource
+        files_resource.get.return_value.execute.return_value = {"id": "file1"}
+
+        with patch("scheduler.services.drive.get_drive_service", return_value=service):
+            get_drive_file_metadata("file1")
+
+        fields_arg = files_resource.get.call_args.kwargs["fields"]
+        self.assertEqual(fields_arg, DRIVE_FILE_FIELDS)
 
 
 class MetaAPIClientTest(TestCase):
@@ -594,6 +612,143 @@ class SchedulingTest(TestCase):
         self.assertEqual(target.scheduled_runs.get().status, ScheduledPostRun.STATUS_SKIPPED)
         target.refresh_from_db()
         self.assertEqual(target.last_status, "content_exhausted")
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://example.com", SCHEDULER_PARTIAL_RETRY_MINUTES=15)
+    def test_partial_success_sets_retry_delay_and_retries_only_failed_platform_on_same_file(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-partial", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-partial", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:partial|ig:partial",
+            display_name="Partial Pair",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+            default_caption="Caption",
+        )
+        slot = timezone.make_aware(datetime(2026, 3, 22, 9, 0))
+        run = ScheduledPostRun.objects.create(target=target, scheduled_for=slot)
+        file_obj = {"id": "file1", "name": "POST1.mp4", "mimeType": "video/mp4"}
+        competing_file = {"id": "file2", "name": "POST2.mp4", "mimeType": "video/mp4"}
+        now = timezone.make_aware(datetime(2026, 3, 22, 9, 30))
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file_obj]), patch(
+            "scheduler.services.publishing._publish_to_facebook",
+            return_value="fb-post",
+        ) as facebook_mock, patch(
+            "scheduler.services.publishing._publish_to_instagram",
+            side_effect=PublishingError("temporary ig failure"),
+        ):
+            outcome = process_scheduled_run(run, now=now)
+
+        run.refresh_from_db()
+        self.assertEqual(outcome, "failed")
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_PARTIAL_SUCCESS)
+        self.assertEqual(run.drive_file_id, "file1")
+        self.assertEqual(run.platform_status[SocialAccount.FACEBOOK], PostLog.STATUS_SUCCESS)
+        self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], PostLog.STATUS_FAILED)
+        self.assertEqual(run.next_retry_at, now + timedelta(minutes=15))
+        self.assertEqual(target.post_logs.filter(platform=SocialAccount.FACEBOOK, status=PostLog.STATUS_SUCCESS).count(), 1)
+        facebook_mock.assert_called_once()
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[competing_file, file_obj]), patch(
+            "scheduler.services.publishing._publish_to_facebook",
+            return_value="duplicate-fb",
+        ) as facebook_retry_mock, patch(
+            "scheduler.services.publishing._publish_to_instagram",
+            return_value="ig-post",
+        ) as instagram_retry_mock:
+            outcome = process_scheduled_run(run, now=now + timedelta(minutes=15))
+
+        run.refresh_from_db()
+        self.assertEqual(outcome, "success")
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_SUCCESS)
+        self.assertIsNone(run.next_retry_at)
+        facebook_retry_mock.assert_not_called()
+        instagram_retry_mock.assert_called_once()
+        self.assertEqual(instagram_retry_mock.call_args.args[1]["id"], "file1")
+        self.assertEqual(target.post_logs.filter(platform=SocialAccount.FACEBOOK, status=PostLog.STATUS_SUCCESS).count(), 1)
+        self.assertEqual(target.post_logs.filter(platform=SocialAccount.INSTAGRAM, status=PostLog.STATUS_SUCCESS).count(), 1)
+
+    @override_settings(
+        PUBLIC_APP_BASE_URL="https://example.com",
+        SCHEDULER_PARTIAL_RETRY_MINUTES=0,
+        SCHEDULER_PARTIAL_MAX_ATTEMPTS=3,
+        SCHEDULER_MAX_RUNS_PER_TICK=5,
+    )
+    def test_partial_success_caps_attempts_then_allows_next_due_slot(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-partial-cap", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-partial-cap", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:partial-cap|ig:partial-cap",
+            display_name="Partial Cap",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posting_times=["09:00", "10:00"],
+            default_caption="Caption",
+        )
+        slot1 = timezone.make_aware(datetime(2026, 3, 22, 9, 0))
+        slot2 = timezone.make_aware(datetime(2026, 3, 22, 10, 0))
+        file1 = {"id": "file1", "name": "POST1.mp4", "mimeType": "video/mp4"}
+        file2 = {"id": "file2", "name": "POST2.mp4", "mimeType": "video/mp4"}
+        run1 = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=slot1,
+            drive_file_id=file1["id"],
+            drive_file_name=file1["name"],
+            drive_mime_type=file1["mimeType"],
+            status=ScheduledPostRun.STATUS_PARTIAL_SUCCESS,
+            platform_status={SocialAccount.FACEBOOK: PostLog.STATUS_SUCCESS, SocialAccount.INSTAGRAM: PostLog.STATUS_FAILED},
+            attempt_count=2,
+        )
+        ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=slot2,
+            drive_file_id=file2["id"],
+            drive_file_name=file2["name"],
+            drive_mime_type=file2["mimeType"],
+        )
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=slot1,
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id=file1["id"],
+            drive_file_name=file1["name"],
+        )
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file1, file2]), patch(
+            "scheduler.services.publishing._publish_to_instagram",
+            side_effect=PublishingError("permanent ig failure"),
+        ):
+            first_result = publish_due_targets(reference_time=timezone.make_aware(datetime(2026, 3, 22, 10, 30)))
+
+        run1.refresh_from_db()
+        self.assertEqual(first_result["failed"], 1)
+        self.assertEqual(run1.status, ScheduledPostRun.STATUS_FAILED)
+        self.assertIsNone(run1.next_retry_at)
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file1, file2]), patch(
+            "scheduler.services.publishing._publish_to_facebook",
+            return_value="fb-post-2",
+        ), patch(
+            "scheduler.services.publishing._publish_to_instagram",
+            return_value="ig-post-2",
+        ):
+            second_result = publish_due_targets(reference_time=timezone.make_aware(datetime(2026, 3, 22, 10, 31)))
+
+        run2 = ScheduledPostRun.objects.get(target=target, scheduled_for=slot2)
+        self.assertEqual(second_result["success"], 1)
+        self.assertEqual(run2.status, ScheduledPostRun.STATUS_SUCCESS)
+        self.assertEqual(run2.drive_file_id, file2["id"])
 
 
 class ProxyHelpersTest(TestCase):
@@ -1518,6 +1673,98 @@ class HealthTest(TestCase):
         self.assertEqual(health["pending_platforms"], ["instagram"])
         self.assertIn("credential/platform", " | ".join(health["backoff_messages"]))
 
+    def test_health_prefers_locked_scheduled_run_file_over_recomputed_current_file(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-health-lock", name="FB")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-health-lock", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="health:locked-run",
+            display_name="Health Locked Run",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        slot = timezone.now()
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=slot,
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id="file-1",
+            drive_file_name="POST1.mp4",
+        )
+        run = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=slot,
+            drive_file_id="file-2",
+            drive_file_name="POST2.mp4",
+            drive_mime_type="video/mp4",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.FACEBOOK: PostLog.STATUS_SUCCESS, SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_BACKOFF},
+            next_retry_at=timezone.now() - timedelta(minutes=1),
+            attempt_count=2,
+        )
+        files = [
+            {"id": "file-1", "name": "POST1.mp4", "mimeType": "video/mp4"},
+            {"id": "file-2", "name": "POST2.mp4", "mimeType": "video/mp4"},
+        ]
+
+        with patch("scheduler.services.health.list_folder_files", return_value=files):
+            health = build_target_health(target)
+
+        self.assertEqual(health["current_file"]["id"], "file-2")
+        self.assertEqual(health["current_file_source"], "scheduled_run")
+        self.assertEqual(health["pending_platforms"], [SocialAccount.INSTAGRAM])
+        self.assertEqual(health["current_run"]["id"], run.id)
+        self.assertEqual(health["current_run"]["next_retry_at"], run.next_retry_at)
+
+    def test_health_ignores_deferred_run_when_reporting_current_file(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-health-deferred", name="FB")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-health-deferred", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="health:deferred-run",
+            display_name="Health Deferred Run",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        slot = timezone.now()
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=slot,
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id="file-1",
+            drive_file_name="POST1.mp4",
+        )
+        ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=slot,
+            drive_file_id="file-2",
+            drive_file_name="POST2.mp4",
+            drive_mime_type="video/mp4",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.FACEBOOK: PostLog.STATUS_SUCCESS, SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_BACKOFF},
+            next_retry_at=timezone.now() + timedelta(hours=1),
+        )
+        files = [
+            {"id": "file-1", "name": "POST1.mp4", "mimeType": "video/mp4"},
+            {"id": "file-2", "name": "POST2.mp4", "mimeType": "video/mp4"},
+        ]
+
+        with patch("scheduler.services.health.list_folder_files", return_value=files):
+            health = build_target_health(target)
+
+        self.assertEqual(health["current_file"]["id"], "file-1")
+        self.assertEqual(health["current_file_source"], "drive_scan")
+        self.assertIsNone(health["current_run"])
+        self.assertEqual(health["pending_platforms"], [SocialAccount.INSTAGRAM])
+
     def test_audit_publish_readiness_prints_operational_state(self):
         from unittest.mock import patch
 
@@ -1642,6 +1889,184 @@ class MediaCacheTest(TestCase):
         second.refresh_from_db()
         self.assertEqual(second.source_fingerprint.split("|")[0], "two")
         self.assertEqual(second.file_size, 6)
+
+    def test_blank_existing_fingerprint_does_not_skip_refresh(self):
+        from unittest.mock import patch
+        from .services.cache import ensure_cached_asset
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="cache:blank-fingerprint",
+            display_name="Cache Blank Fingerprint",
+            drive_folder_id="folder",
+        )
+        file_obj = {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "5"}
+
+        with tempfile.TemporaryDirectory() as temp_dir, override_settings(MEDIA_CACHE_DIR=temp_dir):
+            path = f"{temp_dir}/cached-file"
+            with open(path, "wb") as handle:
+                handle.write(b"stale")
+            MediaAsset.objects.create(
+                target=target,
+                drive_file_id="file1",
+                drive_file_name="POST1.jpeg",
+                variant="default",
+                public_filename="POST1.jpeg",
+                local_path=path,
+                source_mime_type="image/jpeg",
+                source_fingerprint="",
+                content_type="image/jpeg",
+                file_size=5,
+                status=MediaAsset.STATUS_READY,
+            )
+
+            with patch(
+                "scheduler.services.cache.get_drive_file_metadata",
+                return_value={
+                    "id": "file1",
+                    "name": "POST1.jpeg",
+                    "mimeType": "image/jpeg",
+                    "size": "5",
+                    "modifiedTime": "fresh",
+                    "md5Checksum": "checksum",
+                },
+            ), patch("scheduler.services.cache.download_drive_file", return_value=b"fresh") as download_mock:
+                asset = ensure_cached_asset(target, file_obj)
+
+            download_mock.assert_called_once()
+            asset.refresh_from_db()
+            self.assertEqual(asset.source_fingerprint.split("|")[0], "fresh")
+            self.assertNotEqual(asset.source_fingerprint, "")
+            self.assertEqual(Path(asset.local_path).read_bytes(), b"fresh")
+            self.assertEqual(asset.file_size, len(b"fresh"))
+
+    def test_cache_failure_is_persisted(self):
+        from unittest.mock import patch
+        from .services.cache import ensure_cached_asset
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="cache:failure",
+            display_name="Cache Failure",
+            drive_folder_id="folder",
+        )
+        file_obj = {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "5"}
+
+        with tempfile.TemporaryDirectory() as temp_dir, override_settings(MEDIA_CACHE_DIR=temp_dir), patch(
+            "scheduler.services.cache.get_drive_file_metadata",
+            return_value={"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "5"},
+        ), patch("scheduler.services.cache.download_drive_file", side_effect=RuntimeError("drive exploded")):
+            with self.assertRaisesMessage(RuntimeError, "drive exploded"):
+                ensure_cached_asset(target, file_obj)
+
+        asset = MediaAsset.objects.get(target=target, drive_file_id="file1")
+        self.assertEqual(asset.status, MediaAsset.STATUS_FAILED)
+        self.assertIn("drive exploded", asset.last_error)
+        self.assertIsNotNone(asset.last_synced_at)
+
+    def test_ready_cache_refresh_failure_preserves_existing_local_file(self):
+        from unittest.mock import patch
+        from .services.cache import ensure_cached_asset
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="cache:ready-refresh-failure",
+            display_name="Cache Ready Refresh Failure",
+            drive_folder_id="folder",
+        )
+        file_obj = {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "5"}
+
+        with tempfile.TemporaryDirectory() as temp_dir, override_settings(MEDIA_CACHE_DIR=temp_dir):
+            path = Path(temp_dir) / "cached-file"
+            path.write_bytes(b"stale")
+            MediaAsset.objects.create(
+                target=target,
+                drive_file_id="file1",
+                drive_file_name="POST1.jpeg",
+                variant="default",
+                public_filename="POST1.jpeg",
+                local_path=str(path),
+                source_mime_type="image/jpeg",
+                source_fingerprint="old",
+                content_type="image/jpeg",
+                file_size=len(b"stale"),
+                status=MediaAsset.STATUS_READY,
+            )
+
+            with patch(
+                "scheduler.services.cache.get_drive_file_metadata",
+                return_value={"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "6", "modifiedTime": "new"},
+            ), patch("scheduler.services.cache.download_drive_file", side_effect=RuntimeError("drive exploded")):
+                with self.assertRaisesMessage(RuntimeError, "drive exploded"):
+                    ensure_cached_asset(target, file_obj)
+
+            asset = MediaAsset.objects.get(target=target, drive_file_id="file1")
+            self.assertEqual(asset.status, MediaAsset.STATUS_READY)
+            self.assertIn("drive exploded", asset.last_error)
+            self.assertEqual(Path(asset.local_path).read_bytes(), b"stale")
+
+    def test_video_cache_cleans_temp_file_after_stream_failure(self):
+        from unittest.mock import patch
+        from .services.cache import ensure_cached_asset
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="cache:video-stream-failure",
+            display_name="Cache Video Stream Failure",
+            drive_folder_id="folder",
+        )
+        file_obj = {"id": "file-video", "name": "POST1.mp4", "mimeType": "video/mp4", "size": "12"}
+
+        def fail_stream(_file_id, destination_path):
+            Path(destination_path).write_bytes(b"partial")
+            raise RuntimeError("stream failed")
+
+        with tempfile.TemporaryDirectory() as temp_dir, override_settings(MEDIA_CACHE_DIR=temp_dir), patch(
+            "scheduler.services.cache.get_drive_file_metadata",
+            return_value={"id": "file-video", "name": "POST1.mp4", "mimeType": "video/mp4", "size": "12"},
+        ), patch("scheduler.services.cache.download_drive_file_to_path", side_effect=fail_stream):
+            with self.assertRaisesMessage(RuntimeError, "stream failed"):
+                ensure_cached_asset(target, file_obj)
+            self.assertEqual(list(Path(temp_dir).glob("*.tmp")), [])
+
+        asset = MediaAsset.objects.get(target=target, drive_file_id="file-video")
+        self.assertEqual(asset.status, MediaAsset.STATUS_FAILED)
+
+    def test_video_cache_uses_streaming_download(self):
+        from unittest.mock import patch
+        from .services.cache import ensure_cached_asset
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="cache:video-stream",
+            display_name="Cache Video Stream",
+            drive_folder_id="folder",
+        )
+        file_obj = {"id": "file-video", "name": "POST1.mp4", "mimeType": "video/mp4", "size": "12"}
+
+        def fake_stream(_file_id, destination_path):
+            Path(destination_path).write_bytes(b"video-bytes")
+            return len(b"video-bytes")
+
+        with tempfile.TemporaryDirectory() as temp_dir, override_settings(MEDIA_CACHE_DIR=temp_dir), patch(
+            "scheduler.services.cache.get_drive_file_metadata",
+            return_value={"id": "file-video", "name": "POST1.mp4", "mimeType": "video/mp4", "size": "12"},
+        ), patch("scheduler.services.cache.download_drive_file") as bytes_mock, patch(
+            "scheduler.services.cache.download_drive_file_to_path",
+            side_effect=fake_stream,
+        ) as stream_mock:
+            asset = ensure_cached_asset(target, file_obj)
+            cached_bytes = Path(asset.local_path).read_bytes()
+
+        bytes_mock.assert_not_called()
+        stream_mock.assert_called_once()
+        self.assertEqual(asset.file_size, len(b"video-bytes"))
+        self.assertEqual(cached_bytes, b"video-bytes")
 
 
 class InstagramPublishTest(TestCase):

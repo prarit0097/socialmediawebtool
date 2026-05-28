@@ -17,6 +17,10 @@ class DriveConfigError(Exception):
     pass
 
 
+DRIVE_FILE_FIELDS = "id,name,mimeType,size,modifiedTime,md5Checksum"
+DRIVE_LIST_FILE_FIELDS = f"{DRIVE_FILE_FIELDS},createdTime,webViewLink,webContentLink"
+
+
 def extract_drive_folder_id(value: str) -> str:
     value = (value or "").strip()
     if not value:
@@ -51,7 +55,7 @@ def get_drive_file_metadata(file_id: str) -> dict:
         service.files()
         .get(
             fileId=file_id,
-            fields="id,name,mimeType,size",
+            fields=DRIVE_FILE_FIELDS,
             supportsAllDrives=True,
         )
         .execute()
@@ -71,6 +75,21 @@ def download_drive_file(file_id: str) -> bytes:
     return buffer.getvalue()
 
 
+def download_drive_file_to_path(file_id: str, destination_path: str | Path) -> int:
+    service = get_drive_service()
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    from googleapiclient.http import MediaIoBaseDownload
+
+    path = Path(destination_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as handle:
+        downloader = MediaIoBaseDownload(handle, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+    return path.stat().st_size
+
+
 def list_folder_files(folder_id: str) -> list[dict]:
     folder_id = extract_drive_folder_id(folder_id)
     if not folder_id:
@@ -84,7 +103,7 @@ def list_folder_files(folder_id: str) -> list[dict]:
             service.files()
             .list(
                 q=f"'{folder_id}' in parents and trashed = false",
-                fields="nextPageToken,files(id,name,mimeType,createdTime,webViewLink,webContentLink)",
+                fields=f"nextPageToken,files({DRIVE_LIST_FILE_FIELDS})",
                 orderBy="createdTime",
                 pageSize=1000,
                 pageToken=page_token,

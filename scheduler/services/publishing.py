@@ -86,6 +86,14 @@ def _scheduler_max_runs_per_tick() -> int:
     return max(int(getattr(settings, "SCHEDULER_MAX_RUNS_PER_TICK", 5)), 1)
 
 
+def _scheduler_partial_retry_minutes() -> int:
+    return max(int(getattr(settings, "SCHEDULER_PARTIAL_RETRY_MINUTES", 15)), 1)
+
+
+def _scheduler_partial_max_attempts() -> int:
+    return max(int(getattr(settings, "SCHEDULER_PARTIAL_MAX_ATTEMPTS", 3)), 1)
+
+
 def _parse_graph_response(response) -> dict:
     try:
         data = response.json()
@@ -1018,8 +1026,13 @@ def process_scheduled_run(run: ScheduledPostRun, now=None) -> str:
         target.save(update_fields=["last_status", "last_error", "updated_at"])
         outcome = "backoff"
     elif failures:
-        run.status = ScheduledPostRun.STATUS_PARTIAL_SUCCESS if any(status == PostLog.STATUS_SUCCESS for status in statuses.values()) else ScheduledPostRun.STATUS_FAILED
-        run.next_retry_at = None
+        has_partial_success = any(status == PostLog.STATUS_SUCCESS for status in statuses.values())
+        if has_partial_success and run.attempt_count < _scheduler_partial_max_attempts():
+            run.status = ScheduledPostRun.STATUS_PARTIAL_SUCCESS
+            run.next_retry_at = now + timedelta(minutes=_scheduler_partial_retry_minutes())
+        else:
+            run.status = ScheduledPostRun.STATUS_FAILED
+            run.next_retry_at = None
         run.last_error = " | ".join(failures)
         target.last_status = "failed"
         target.last_error = run.last_error
