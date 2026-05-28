@@ -12,7 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .forms import MetaCredentialForm, PublishingTargetForm
 from .models import AIMediaInsight, MediaAsset, MetaCredential, PublishingTarget
-from .services.auth import app_admin_required
+from .services.auth import app_admin_required, logout_response
 from .services.ai import AIServiceError, ai_is_configured, get_or_generate_media_insight
 from .services.drive import download_drive_file, get_drive_file_metadata
 from .services.health import build_target_health
@@ -41,6 +41,10 @@ def _run_test_post_async(target_id: int) -> None:
         PublishingTarget.objects.filter(pk=target_id).update(last_status="failed", last_error=str(exc))
     finally:
         close_old_connections()
+
+
+def logout(request):
+    return logout_response()
 
 
 @require_http_methods(["GET", "POST"])

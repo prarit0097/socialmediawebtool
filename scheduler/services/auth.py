@@ -19,6 +19,12 @@ def _unauthorized_response() -> HttpResponse:
     return response
 
 
+def logout_response() -> HttpResponse:
+    response = HttpResponse("Logged out. Close this tab or sign in again to continue.", status=401)
+    response["WWW-Authenticate"] = f'Basic realm="{settings.APP_ADMIN_REALM} Logged Out"'
+    return response
+
+
 def _decode_basic_auth(header_value: str) -> tuple[str, str] | None:
     if not header_value.lower().startswith("basic "):
         return None

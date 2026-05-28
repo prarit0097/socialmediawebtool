@@ -823,6 +823,15 @@ class AdminAuthGateTest(TestCase):
         credentials = base64.b64encode(b"admin:secret").decode("ascii")
         response = self.client.get(reverse("scheduler:dashboard"), HTTP_AUTHORIZATION=f"Basic {credentials}")
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Logout")
+        self.assertContains(response, reverse("scheduler:logout"))
+
+    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret", APP_ADMIN_REALM="Test Realm")
+    def test_logout_returns_basic_auth_challenge(self):
+        response = self.client.get(reverse("scheduler:logout"))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers["WWW-Authenticate"], 'Basic realm="Test Realm Logged Out"')
+        self.assertContains(response, "Logged out", status_code=401)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
