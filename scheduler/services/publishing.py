@@ -65,6 +65,12 @@ TRANSIENT_BACKOFF_MARKERS = (
     "instagram status polling failed after container creation",
     "instagram container publish state is uncertain",
 )
+AUTH_FATAL_MARKERS = (
+    "error validating access token",
+    "session has been invalidated",
+    "invalid oauth access token",
+    "access token has expired",
+)
 CONTENT_EXHAUSTED_MARKERS = (
     "all unique media files",
     "no publishable image or video files",
@@ -117,6 +123,11 @@ def _is_meta_rate_limit_error(message: str) -> bool:
 def _is_transient_backoff_error(message: str) -> bool:
     text = (message or "").lower()
     return any(marker in text for marker in TRANSIENT_BACKOFF_MARKERS)
+
+
+def _is_fatal_auth_error(message: str) -> bool:
+    text = (message or "").lower()
+    return any(marker in text for marker in AUTH_FATAL_MARKERS)
 
 
 def _is_content_exhausted_error(message: str) -> bool:
@@ -1027,7 +1038,8 @@ def process_scheduled_run(run: ScheduledPostRun, now=None) -> str:
         outcome = "backoff"
     elif failures:
         has_partial_success = any(status == PostLog.STATUS_SUCCESS for status in statuses.values())
-        if has_partial_success and run.attempt_count < _scheduler_partial_max_attempts():
+        has_fatal_auth_failure = any(_is_fatal_auth_error(message) for message in failures)
+        if has_partial_success and not has_fatal_auth_failure and run.attempt_count < _scheduler_partial_max_attempts():
             run.status = ScheduledPostRun.STATUS_PARTIAL_SUCCESS
             run.next_retry_at = now + timedelta(minutes=_scheduler_partial_retry_minutes())
         else:

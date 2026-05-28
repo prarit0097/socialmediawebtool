@@ -750,6 +750,45 @@ class SchedulingTest(TestCase):
         self.assertEqual(run2.status, ScheduledPostRun.STATUS_SUCCESS)
         self.assertEqual(run2.drive_file_id, file2["id"])
 
+    @override_settings(PUBLIC_APP_BASE_URL="https://example.com", SCHEDULER_PARTIAL_RETRY_MINUTES=15)
+    def test_invalid_token_failure_does_not_partial_retry_after_platform_success(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-invalid-token", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-invalid-token", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:invalid-token|ig:invalid-token",
+            display_name="Invalid Token Pair",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+            default_caption="Caption",
+        )
+        slot = timezone.make_aware(datetime(2026, 3, 22, 9, 0))
+        run = ScheduledPostRun.objects.create(target=target, scheduled_for=slot)
+        file_obj = {"id": "file1", "name": "POST1.mp4", "mimeType": "video/mp4"}
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file_obj]), patch(
+            "scheduler.services.publishing._publish_to_facebook",
+            return_value="fb-post",
+        ), patch(
+            "scheduler.services.publishing._publish_to_instagram",
+            side_effect=PublishingError(
+                "Error validating access token: The session has been invalidated because the user changed their password"
+            ),
+        ):
+            outcome = process_scheduled_run(run, now=timezone.make_aware(datetime(2026, 3, 22, 9, 30)))
+
+        run.refresh_from_db()
+        self.assertEqual(outcome, "failed")
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_FAILED)
+        self.assertIsNone(run.next_retry_at)
+        self.assertEqual(run.platform_status[SocialAccount.FACEBOOK], PostLog.STATUS_SUCCESS)
+        self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], PostLog.STATUS_FAILED)
+
 
 class ProxyHelpersTest(TestCase):
     @override_settings(PUBLIC_APP_BASE_URL="https://example.com")
