@@ -74,6 +74,8 @@
                         <div class="target-meta">
                             <span>{{ credential.user_name|default:"Unknown Meta user" }}</span>
                             <span>{{ credential.masked_token }}</span>
+                            <span>{{ credential.accounts.count }} account(s)</span>
+                            <span>{{ credential.targets.count }} target(s)</span>
                         </div>
                         {% if credential.last_error %}
                             <div class="target-meta">
@@ -86,11 +88,11 @@
                             <input type="hidden" name="credential_id" value="{{ credential.id }}">
                             <button class="ghost" type="submit">Sync accounts</button>
                         </form>
-                        <form method="post" onsubmit="return confirm('Is credential ko permanently delete karna hai?');">
+                        <form method="post" onsubmit="return confirm('This only disables the token. Existing targets/accounts will stay in DB. Continue?');">
                             {% csrf_token %}
                             <input type="hidden" name="action" value="delete_credential">
                             <input type="hidden" name="credential_id" value="{{ credential.id }}">
-                            <button class="danger" type="submit">Delete</button>
+                            <button class="danger" type="submit">Disable token</button>
                         </form>
                     </div>
                 {% empty %}

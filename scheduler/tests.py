@@ -833,6 +833,33 @@ class AdminAuthGateTest(TestCase):
         self.assertEqual(response.headers["WWW-Authenticate"], 'Basic realm="Test Realm Logged Out"')
         self.assertContains(response, "Logged out", status_code=401)
 
+    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    def test_dashboard_disable_credential_preserves_accounts_and_targets(self):
+        credentials = base64.b64encode(b"admin:secret").decode("ascii")
+        credential = MetaCredential.objects.create(label="Token A", access_token="token-a")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-a", name="Page A")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-a",
+            display_name="Page A",
+            facebook_account=fb,
+        )
+
+        response = self.client.post(
+            reverse("scheduler:dashboard"),
+            {"action": "delete_credential", "credential_id": credential.id},
+            HTTP_AUTHORIZATION=f"Basic {credentials}",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        credential.refresh_from_db()
+        target.refresh_from_db()
+        self.assertFalse(credential.is_active)
+        self.assertFalse(target.is_active)
+        self.assertTrue(MetaCredential.objects.filter(pk=credential.pk).exists())
+        self.assertTrue(SocialAccount.objects.filter(pk=fb.pk).exists())
+        self.assertTrue(PublishingTarget.objects.filter(pk=target.pk).exists())
+
 
 @override_settings(SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
 class DashboardTargetListTest(TestCase):

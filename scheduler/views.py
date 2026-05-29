@@ -79,8 +79,11 @@ def dashboard(request):
         elif action == "delete_credential":
             credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
             label = credential.label
-            credential.delete()
-            messages.success(request, f"{label} deleted permanently.")
+            credential.is_active = False
+            credential.last_error = "Disabled from dashboard. Existing accounts and targets were preserved."
+            credential.save(update_fields=["is_active", "last_error", "updated_at"])
+            credential.targets.update(is_active=False, last_status="failed", last_error="Paused because the Meta credential was disabled.")
+            messages.success(request, f"{label} disabled. Existing accounts and targets were preserved.")
             return redirect("scheduler:dashboard")
         elif action == "run_due_posts":
             result = publish_due_targets()
