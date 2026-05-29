@@ -21,7 +21,7 @@ from .services.drive import extract_drive_folder_id
 from .services.health import build_target_health
 from .services.metrics import fetch_facebook_metrics, iter_tool_post_metrics
 from .services.media_transform import build_instagram_ready_image
-from .services.publishing import PublishingError, _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, _wait_for_instagram_container, build_caption, get_daily_slots, pick_next_shared_file, process_scheduled_run, publish_due_targets, publish_platform
+from .services.publishing import PublishBackoff, PublishingError, _platform_already_succeeded_for_file, _publish_to_facebook, _publish_to_instagram, _slot_is_complete, _wait_for_instagram_container, build_caption, get_daily_slots, pick_next_shared_file, process_scheduled_run, publish_due_targets, publish_platform
 from .services.proxy import build_proxy_urls, sign_media_token, unsign_media_token
 from .services.telegram import TELEGRAM_MESSAGE_MAX_LENGTH, _split_telegram_message, build_daily_report_message
 
@@ -725,6 +725,35 @@ class SchedulingTest(TestCase):
         process_mock.assert_not_called()
         self.assertEqual(result["checked_targets"], 0)
         self.assertEqual(result["processed_runs"], 0)
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://example.com", SCHEDULER_PARTIAL_RETRY_MINUTES=15, META_RATE_LIMIT_BACKOFF_MINUTES=90)
+    def test_markerless_backoff_does_not_create_long_retry_window(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-markerless", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:markerless-backoff",
+            display_name="Markerless Backoff",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        run = ScheduledPostRun.objects.create(target=target, scheduled_for=timezone.now() - timedelta(minutes=5))
+        file_obj = {"id": "file-markerless", "name": "POST.mp4", "mimeType": "video/mp4"}
+        now = timezone.now()
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file_obj]), patch(
+            "scheduler.services.publishing.publish_platform",
+            side_effect=PublishBackoff("Another publish run is already active for this target/slot."),
+        ):
+            outcome = process_scheduled_run(run, now=now)
+
+        run.refresh_from_db()
+        self.assertEqual(outcome, "backoff")
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_BACKOFF)
+        self.assertEqual(run.next_retry_at, now + timedelta(minutes=15))
 
     @override_settings(PUBLIC_APP_BASE_URL="https://example.com", SCHEDULER_PARTIAL_RETRY_MINUTES=15)
     def test_partial_success_sets_retry_delay_and_retries_only_failed_platform_on_same_file(self):

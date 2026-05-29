@@ -1032,7 +1032,12 @@ def process_scheduled_run(run: ScheduledPostRun, now=None) -> str:
         outcome = "success" if published_any else "complete"
     elif backoffs or retry_minutes:
         run.status = ScheduledPostRun.STATUS_BACKOFF
-        run.next_retry_at = max(retry_times) if retry_times else now + timedelta(minutes=retry_minutes or settings.META_RATE_LIMIT_BACKOFF_MINUTES)
+        if retry_times:
+            run.next_retry_at = max(retry_times)
+        elif retry_minutes:
+            run.next_retry_at = now + timedelta(minutes=retry_minutes)
+        else:
+            run.next_retry_at = now + timedelta(minutes=_scheduler_partial_retry_minutes())
         run.last_error = " | ".join(messages)
         target.last_status = "backoff"
         target.last_error = run.last_error
