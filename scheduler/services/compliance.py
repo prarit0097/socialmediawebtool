@@ -84,6 +84,8 @@ def evaluate_publish_readiness(
 
     if not target.is_active:
         result.blocking_issues.append("Target is inactive.")
+    if not target.credential.is_active:
+        result.blocking_issues.append("Meta credential is archived.")
     if not target.drive_folder_id:
         result.blocking_issues.append("Drive folder is not configured.")
     if platform == SocialAccount.FACEBOOK and not target.facebook_account_id:

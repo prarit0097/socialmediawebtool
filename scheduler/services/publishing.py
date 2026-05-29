@@ -927,6 +927,8 @@ def publish_target(target: PublishingTarget, scheduled_for=None, scheduled_run: 
 def publish_target_now(target: PublishingTarget) -> None:
     if not target.is_active:
         raise PublishingError("Target is inactive.")
+    if not target.credential.is_active:
+        raise PublishingError("Meta credential is archived.")
     if not target.drive_folder_id:
         raise PublishingError("Drive folder is not configured for this target.")
     scheduled_for = timezone.now()
@@ -1085,7 +1087,7 @@ def publish_due_targets(reference_time=None) -> dict:
     checked_targets = 0
     processed_runs = 0
     max_runs = _scheduler_max_runs_per_tick()
-    targets = PublishingTarget.objects.filter(is_active=True).select_related("credential", "facebook_account", "instagram_account")
+    targets = PublishingTarget.objects.filter(is_active=True, credential__is_active=True).select_related("credential", "facebook_account", "instagram_account")
     for target in targets:
         checked_targets += 1
         if processed_runs >= max_runs:

@@ -72,6 +72,7 @@
                     <div class="target-row">
                         <strong>{{ credential.label }}</strong>
                         <div class="target-meta">
+                            <span class="badge {% if credential.is_active %}ready{% else %}warning{% endif %}">{% if credential.is_active %}Active{% else %}Archived{% endif %}</span>
                             <span>{{ credential.user_name|default:"Unknown Meta user" }}</span>
                             <span>{{ credential.masked_token }}</span>
                             <span>{{ credential.accounts.count }} account(s)</span>
@@ -82,18 +83,28 @@
                                 <span>Error: {{ credential.last_error }}</span>
                             </div>
                         {% endif %}
-                        <form method="post">
-                            {% csrf_token %}
-                            <input type="hidden" name="action" value="sync_credential">
-                            <input type="hidden" name="credential_id" value="{{ credential.id }}">
-                            <button class="ghost" type="submit">Sync accounts</button>
-                        </form>
-                        <form method="post" onsubmit="return confirm('This only disables the token. Existing targets/accounts will stay in DB. Continue?');">
-                            {% csrf_token %}
-                            <input type="hidden" name="action" value="delete_credential">
-                            <input type="hidden" name="credential_id" value="{{ credential.id }}">
-                            <button class="danger" type="submit">Disable token</button>
-                        </form>
+                        {% if credential.is_active %}
+                            <form method="post">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="sync_credential">
+                                <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                                <button class="ghost" type="submit">Sync accounts</button>
+                            </form>
+                            <form method="post" onsubmit="return confirm('Archive this token safely? Existing targets/accounts will stay in DB and publishing will pause.');">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="delete_credential">
+                                <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                                <button class="danger" type="submit">Archive token (safe)</button>
+                            </form>
+                        {% else %}
+                            <span class="badge warning">Archived tokens stay in DB. Publishing is paused until restored.</span>
+                            <form method="post">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="restore_credential">
+                                <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                                <button class="ghost" type="submit">Restore token</button>
+                            </form>
+                        {% endif %}
                     </div>
                 {% empty %}
                     <p class="muted">Abhi koi Meta token configured nahi hai.</p>

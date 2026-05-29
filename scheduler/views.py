@@ -11,9 +11,10 @@ from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 
 from .forms import MetaCredentialForm, PublishingTargetForm
-from .models import AIMediaInsight, MediaAsset, MetaCredential, PublishingTarget
+from .models import AIMediaInsight, MediaAsset, MetaCredential, MetaCredentialEvent, PublishingTarget
 from .services.auth import app_admin_required, logout_response
 from .services.ai import AIServiceError, ai_is_configured, get_or_generate_media_insight
+from .services.credential_lifecycle import archive_credential_from_request, record_credential_event, restore_credential_from_request
 from .services.drive import download_drive_file, get_drive_file_metadata
 from .services.health import build_target_health
 from .services.media_transform import build_instagram_ready_image
@@ -56,6 +57,13 @@ def dashboard(request):
             form = MetaCredentialForm(request.POST)
             if form.is_valid():
                 credential = form.save()
+                record_credential_event(
+                    credential,
+                    action=MetaCredentialEvent.ACTION_CREATED,
+                    source="dashboard",
+                    actor=request.META.get("REMOTE_ADDR", ""),
+                    note="Credential saved from dashboard.",
+                )
                 try:
                     result = sync_credential_accounts(credential)
                     messages.success(
@@ -63,10 +71,20 @@ def dashboard(request):
                         _sync_status_message("Meta token saved and accounts synced.", result),
                     )
                 except MetaAPIError as exc:
+                    record_credential_event(
+                        credential,
+                        action=MetaCredentialEvent.ACTION_SYNC_FAILED,
+                        source="dashboard",
+                        actor=request.META.get("REMOTE_ADDR", ""),
+                        note=str(exc),
+                    )
                     messages.error(request, f"Token saved, but sync failed: {exc}")
                 return redirect("scheduler:dashboard")
         elif action == "sync_credential":
             credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
+            if not credential.is_active:
+                messages.error(request, f"{credential.label} is disabled. Re-enable the credential before syncing.")
+                return redirect("scheduler:dashboard")
             try:
                 result = sync_credential_accounts(credential)
                 messages.success(
@@ -79,11 +97,14 @@ def dashboard(request):
         elif action == "delete_credential":
             credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
             label = credential.label
-            credential.is_active = False
-            credential.last_error = "Disabled from dashboard. Existing accounts and targets were preserved."
-            credential.save(update_fields=["is_active", "last_error", "updated_at"])
-            credential.targets.update(is_active=False, last_status="failed", last_error="Paused because the Meta credential was disabled.")
-            messages.success(request, f"{label} disabled. Existing accounts and targets were preserved.")
+            archive_credential_from_request(credential, request, source="dashboard")
+            messages.success(request, f"{label} archived. Existing accounts and targets were preserved.")
+            return redirect("scheduler:dashboard")
+        elif action == "restore_credential":
+            credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
+            label = credential.label
+            restore_credential_from_request(credential, request, source="dashboard")
+            messages.success(request, f"{label} restored. Sync accounts to refresh Meta assets.")
             return redirect("scheduler:dashboard")
         elif action == "run_due_posts":
             result = publish_due_targets()
@@ -118,7 +139,10 @@ def dashboard(request):
     active_scheduled_targets = [
         item
         for item in target_items
-        if item["target"].is_active and item["target"].drive_folder_id and (item["target"].facebook_account_id or item["target"].instagram_account_id)
+        if item["target"].is_active
+        and item["target"].credential.is_active
+        and item["target"].drive_folder_id
+        and (item["target"].facebook_account_id or item["target"].instagram_account_id)
     ]
     context = {
         "form": form,

@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .forms import PublishingTargetForm
-from .models import MediaAsset, MetaCredential, PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
+from .models import MediaAsset, MetaCredential, MetaCredentialEvent, PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
 from .services.diagnostics import build_rejection_diagnostics
 from .services.ai import _build_model_candidates, _clean_media_name_context, _normalize_ai_payload, _payload_quality_errors, _resolve_model_name, build_ai_caption_for_media, get_or_generate_media_insight
 from .services.compliance import evaluate_publish_readiness
@@ -338,6 +338,97 @@ class MetaSyncPreservationTest(TestCase):
         self.assertEqual(target.credential, old_credential)
         self.assertEqual(target.drive_folder_id, "configured-folder")
 
+    def test_sync_second_token_with_new_instagram_only_account_adds_target(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        old_credential = MetaCredential.objects.create(label="Old Token", access_token="old-token")
+        old_ig = old_credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-old", name="Old IG")
+        old_target = PublishingTarget.objects.create(
+            credential=old_credential,
+            sync_key="ig:ig-old",
+            display_name="Old IG",
+            instagram_account=old_ig,
+            drive_folder_id="old-folder",
+        )
+        new_credential = MetaCredential.objects.create(label="New Token", access_token="new-token")
+        assets = self._asset_bundle(
+            instagram_accounts=[{"id": "ig-new-business", "username": "new_business", "name": "New Business IG"}]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            result = sync_credential_accounts(new_credential)
+
+        old_target.refresh_from_db()
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["reused"], 0)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(PublishingTarget.objects.count(), 2)
+        self.assertEqual(old_target.credential, old_credential)
+        self.assertEqual(old_target.drive_folder_id, "old-folder")
+        self.assertTrue(PublishingTarget.objects.filter(credential=new_credential, sync_key="ig:ig-new-business").exists())
+
+    def test_sync_second_token_with_existing_instagram_only_account_is_skipped(self):
+        from unittest.mock import patch
+        from .services.meta import sync_credential_accounts
+
+        old_credential = MetaCredential.objects.create(label="Old", access_token="old-token")
+        old_ig = old_credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-only", name="IG Only")
+        target = PublishingTarget.objects.create(
+            credential=old_credential,
+            sync_key="ig:ig-only",
+            display_name="IG Only",
+            instagram_account=old_ig,
+            drive_folder_id="configured-folder",
+        )
+        new_credential = MetaCredential.objects.create(label="New", access_token="new-token")
+        assets = self._asset_bundle(
+            instagram_accounts=[{"id": "ig-only", "username": "ig_only", "name": "IG Only From New Token"}]
+        )
+
+        with patch("scheduler.services.meta.fetch_meta_assets", return_value=assets):
+            result = sync_credential_accounts(new_credential)
+
+        target.refresh_from_db()
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["reused"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(PublishingTarget.objects.count(), 1)
+        self.assertEqual(target.credential, old_credential)
+        self.assertEqual(target.drive_folder_id, "configured-folder")
+
+    def test_fetch_meta_assets_includes_business_manager_instagram_accounts(self):
+        from unittest.mock import patch
+        from .services.meta import fetch_meta_assets
+
+        def fake_graph_get(path, _token, params=None):
+            fields = (params or {}).get("fields", "")
+            if path == "/me" and fields == "id,name":
+                return {"id": "user-1", "name": "User One"}
+            if path == "/me/accounts":
+                return {"data": []}
+            if path == "/me" and fields.startswith("accounts{"):
+                return {"accounts": {"data": []}}
+            if path == "/me" and fields == "instagram_accounts{id,username,name}":
+                return {"instagram_accounts": []}
+            if path == "/me" and fields.startswith("businesses{"):
+                return {
+                    "businesses": {
+                        "data": [
+                            {
+                                "instagram_accounts": {"data": [{"id": "ig-business", "username": "biz", "name": "Business IG"}]},
+                                "owned_instagram_accounts": {"data": [{"id": "ig-owned", "username": "owned", "name": "Owned IG"}]},
+                            }
+                        ]
+                    }
+                }
+            return {}
+
+        with patch("scheduler.services.meta._graph_get", side_effect=fake_graph_get):
+            assets = fetch_meta_assets("token")
+
+        self.assertEqual({item["id"] for item in assets.instagram_accounts}, {"ig-business", "ig-owned"})
+
     def test_sync_retires_empty_duplicate_when_configured_target_becomes_pair(self):
         from unittest.mock import patch
         from .services.meta import sync_credential_accounts
@@ -613,6 +704,28 @@ class SchedulingTest(TestCase):
         target.refresh_from_db()
         self.assertEqual(target.last_status, "content_exhausted")
 
+    def test_due_runner_ignores_targets_under_archived_credentials(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Archived", access_token="token", is_active=False)
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-archived", name="FB", access_token="page-token")
+        PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:archived",
+            display_name="Archived Target",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+            is_active=True,
+        )
+
+        with patch("scheduler.services.publishing.process_scheduled_run") as process_mock:
+            result = publish_due_targets(reference_time=timezone.make_aware(datetime(2026, 3, 22, 9, 30)))
+
+        process_mock.assert_not_called()
+        self.assertEqual(result["checked_targets"], 0)
+        self.assertEqual(result["processed_runs"], 0)
+
     @override_settings(PUBLIC_APP_BASE_URL="https://example.com", SCHEDULER_PARTIAL_RETRY_MINUTES=15)
     def test_partial_success_sets_retry_delay_and_retries_only_failed_platform_on_same_file(self):
         from unittest.mock import patch
@@ -859,10 +972,134 @@ class AdminAuthGateTest(TestCase):
         self.assertTrue(MetaCredential.objects.filter(pk=credential.pk).exists())
         self.assertTrue(SocialAccount.objects.filter(pk=fb.pk).exists())
         self.assertTrue(PublishingTarget.objects.filter(pk=target.pk).exists())
+        event = MetaCredentialEvent.objects.get(action=MetaCredentialEvent.ACTION_ARCHIVED, credential=credential)
+        self.assertEqual(event.snapshot["credential"]["id"], credential.id)
+        self.assertEqual(event.snapshot["targets"][0]["id"], target.id)
+
+    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    def test_dashboard_restore_credential_reactivates_previously_active_targets(self):
+        credentials = base64.b64encode(b"admin:secret").decode("ascii")
+        credential = MetaCredential.objects.create(label="Token A", access_token="token-a")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-a", name="Page A")
+        active_target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-a",
+            display_name="Page A",
+            facebook_account=fb,
+            is_active=True,
+        )
+        inactive_target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:fb-b",
+            display_name="Page B",
+            is_active=False,
+        )
+        self.client.post(
+            reverse("scheduler:dashboard"),
+            {"action": "delete_credential", "credential_id": credential.id},
+            HTTP_AUTHORIZATION=f"Basic {credentials}",
+        )
+
+        response = self.client.post(
+            reverse("scheduler:dashboard"),
+            {"action": "restore_credential", "credential_id": credential.id},
+            HTTP_AUTHORIZATION=f"Basic {credentials}",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        credential.refresh_from_db()
+        active_target.refresh_from_db()
+        inactive_target.refresh_from_db()
+        self.assertTrue(credential.is_active)
+        self.assertTrue(active_target.is_active)
+        self.assertFalse(inactive_target.is_active)
+        self.assertTrue(MetaCredentialEvent.objects.filter(action=MetaCredentialEvent.ACTION_RESTORED, credential=credential).exists())
+
+    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    def test_dashboard_rejects_sync_for_disabled_credential(self):
+        from unittest.mock import patch
+
+        credentials = base64.b64encode(b"admin:secret").decode("ascii")
+        credential = MetaCredential.objects.create(label="Disabled Token", access_token="token-a", is_active=False)
+
+        with patch("scheduler.views.sync_credential_accounts") as sync_mock:
+            response = self.client.post(
+                reverse("scheduler:dashboard"),
+                {"action": "sync_credential", "credential_id": credential.id},
+                HTTP_AUTHORIZATION=f"Basic {credentials}",
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        sync_mock.assert_not_called()
+        self.assertContains(response, "Disabled Token is disabled")
+
+    def test_admin_does_not_allow_hard_delete_for_core_posting_records(self):
+        from .admin import MetaCredentialAdmin, PublishingTargetAdmin, SocialAccountAdmin
+        from django.contrib.admin.sites import AdminSite
+
+        site = AdminSite()
+        self.assertFalse(MetaCredentialAdmin(MetaCredential, site).has_delete_permission(None))
+        self.assertFalse(SocialAccountAdmin(SocialAccount, site).has_delete_permission(None))
+        self.assertFalse(PublishingTargetAdmin(PublishingTarget, site).has_delete_permission(None))
 
 
 @override_settings(SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
 class DashboardTargetListTest(TestCase):
+    def test_dashboard_add_token_persists_credential_and_redirect_shows_it(self):
+        from unittest.mock import patch
+
+        with patch(
+            "scheduler.views.sync_credential_accounts",
+            return_value={"created": 0, "reused": 0, "skipped": 0, "missing": 0},
+        ):
+            response = self.client.post(
+                reverse("scheduler:dashboard"),
+                {"action": "add_token", "label": "Business Manager A", "access_token": "token-a"},
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(MetaCredential.objects.count(), 1)
+        self.assertContains(response, "Business Manager A")
+        self.assertEqual(MetaCredentialEvent.objects.filter(action=MetaCredentialEvent.ACTION_CREATED).count(), 1)
+
+    def test_dashboard_add_token_sync_failure_keeps_credential_and_shows_error(self):
+        from unittest.mock import patch
+        from .services.meta import MetaAPIError
+
+        with patch("scheduler.views.sync_credential_accounts", side_effect=MetaAPIError("Meta sync failed")):
+            response = self.client.post(
+                reverse("scheduler:dashboard"),
+                {"action": "add_token", "label": "Business Manager B", "access_token": "token-b"},
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        credential = MetaCredential.objects.get()
+        self.assertEqual(credential.label, "Business Manager B")
+        self.assertContains(response, "Business Manager B")
+        self.assertContains(response, "Token saved, but sync failed: Meta sync failed")
+        self.assertTrue(MetaCredentialEvent.objects.filter(action=MetaCredentialEvent.ACTION_SYNC_FAILED, credential=credential).exists())
+
+    def test_dashboard_sync_credential_failure_preserves_existing_rows_after_reload(self):
+        from unittest.mock import patch
+        from .services.meta import MetaAPIError
+
+        credential = MetaCredential.objects.create(label="Existing Token", access_token="token-existing")
+
+        with patch("scheduler.views.sync_credential_accounts", side_effect=MetaAPIError("Meta unavailable")):
+            response = self.client.post(
+                reverse("scheduler:dashboard"),
+                {"action": "sync_credential", "credential_id": credential.id},
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(MetaCredential.objects.filter(pk=credential.pk).exists())
+        self.assertContains(response, "Existing Token")
+        self.assertContains(response, "Sync failed: Meta unavailable")
+
     def test_dashboard_shows_targets_from_multiple_tokens_with_credential_labels(self):
         credential_a = MetaCredential.objects.create(label="Token A", access_token="token-a")
         credential_b = MetaCredential.objects.create(label="Token B", access_token="token-b")

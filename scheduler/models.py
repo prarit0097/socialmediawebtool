@@ -29,6 +29,34 @@ class MetaCredential(models.Model):
         return f"{self.access_token[:6]}...{self.access_token[-4:]}"
 
 
+class MetaCredentialEvent(models.Model):
+    ACTION_CREATED = "created"
+    ACTION_SYNC_FAILED = "sync_failed"
+    ACTION_ARCHIVED = "archived"
+    ACTION_RESTORED = "restored"
+    ACTION_CHOICES = [
+        (ACTION_CREATED, "Created"),
+        (ACTION_SYNC_FAILED, "Sync failed"),
+        (ACTION_ARCHIVED, "Archived"),
+        (ACTION_RESTORED, "Restored"),
+    ]
+
+    credential = models.ForeignKey(MetaCredential, on_delete=models.SET_NULL, null=True, blank=True, related_name="events")
+    credential_label = models.CharField(max_length=120, blank=True)
+    action = models.CharField(max_length=40, choices=ACTION_CHOICES)
+    source = models.CharField(max_length=80, blank=True)
+    actor = models.CharField(max_length=120, blank=True)
+    note = models.TextField(blank=True)
+    snapshot = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.credential_label or self.credential_id}: {self.action}"
+
+
 class SocialAccount(models.Model):
     FACEBOOK = "facebook"
     INSTAGRAM = "instagram"

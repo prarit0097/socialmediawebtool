@@ -1,12 +1,33 @@
 from django.contrib import admin
 
-from .models import AIMediaInsight, DailyReportLog, MediaAsset, MetaCredential, PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
+from .models import AIMediaInsight, DailyReportLog, MediaAsset, MetaCredential, MetaCredentialEvent, PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
+from .services.credential_lifecycle import archive_credential, restore_credential
 
 
 @admin.register(MetaCredential)
 class MetaCredentialAdmin(admin.ModelAdmin):
     list_display = ("label", "user_name", "user_id", "is_active", "last_sync_at")
     search_fields = ("label", "user_name", "user_id")
+    actions = ["archive_credentials", "restore_credentials"]
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    @admin.action(description="Archive selected credentials without deleting data")
+    def archive_credentials(self, request, queryset):
+        count = 0
+        for credential in queryset:
+            archive_credential(credential, source="django-admin", actor=str(request.user), note="Archived from Django admin.")
+            count += 1
+        self.message_user(request, f"{count} credential(s) archived. No rows were deleted.")
+
+    @admin.action(description="Restore selected credentials")
+    def restore_credentials(self, request, queryset):
+        count = 0
+        for credential in queryset:
+            restore_credential(credential, source="django-admin", actor=str(request.user), note="Restored from Django admin.")
+            count += 1
+        self.message_user(request, f"{count} credential(s) restored.")
 
 
 @admin.register(SocialAccount)
@@ -15,12 +36,18 @@ class SocialAccountAdmin(admin.ModelAdmin):
     list_filter = ("platform", "is_active")
     search_fields = ("name", "username", "external_id")
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(PublishingTarget)
 class PublishingTargetAdmin(admin.ModelAdmin):
     list_display = ("display_name", "credential", "posts_per_day", "ai_enabled", "ai_auto_caption_enabled", "is_active", "last_status")
     list_filter = ("is_active", "ai_enabled", "ai_auto_caption_enabled")
     search_fields = ("display_name", "drive_folder_id")
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(PostLog)
@@ -54,3 +81,20 @@ class AIMediaInsightAdmin(admin.ModelAdmin):
 @admin.register(DailyReportLog)
 class DailyReportLogAdmin(admin.ModelAdmin):
     list_display = ("report_date", "status", "sent_at", "telegram_chat_id")
+
+
+@admin.register(MetaCredentialEvent)
+class MetaCredentialEventAdmin(admin.ModelAdmin):
+    list_display = ("credential_label", "credential", "action", "source", "actor", "created_at")
+    list_filter = ("action", "source")
+    search_fields = ("credential_label", "actor", "note")
+    readonly_fields = ("credential", "credential_label", "action", "source", "actor", "note", "snapshot", "created_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
