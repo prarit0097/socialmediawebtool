@@ -157,19 +157,25 @@
     {% if app_settings.app_admin_configured %}
         <script>
             document.querySelectorAll("[data-logout-button]").forEach((button) => {
-                button.addEventListener("click", async (event) => {
+                button.addEventListener("click", (event) => {
                     event.preventDefault();
                     button.setAttribute("aria-busy", "true");
+                    const staleCredentials = btoa(`logged-out:${Date.now()}`);
                     try {
-                        await fetch(button.href, {
+                        fetch(button.href, {
                             method: "GET",
-                            credentials: "include",
+                            credentials: "omit",
                             cache: "no-store",
+                            headers: {
+                                "Authorization": `Basic ${staleCredentials}`,
+                            },
                         });
                     } catch (error) {
                         // Network/browser auth prompts should not leave users parked on /logout/.
                     }
-                    window.location.replace(button.dataset.homeUrl || "/");
+                    window.setTimeout(() => {
+                        window.location.replace(button.dataset.homeUrl || "/");
+                    }, 100);
                 });
             });
         </script>
