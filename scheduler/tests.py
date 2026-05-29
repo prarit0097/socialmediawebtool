@@ -967,6 +967,7 @@ class AdminAuthGateTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Logout")
         self.assertContains(response, reverse("scheduler:logout"))
+        self.assertContains(response, 'data-home-url="/"')
 
     @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret", APP_ADMIN_REALM="Test Realm")
     def test_logout_returns_basic_auth_challenge(self):

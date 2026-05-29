@@ -43,6 +43,7 @@
             box-shadow: 0 8px 18px rgba(24, 33, 38, 0.12);
         }
         .logout-button:hover { background: rgba(47, 108, 99, 0.08); }
+        .logout-button[aria-busy="true"] { opacity: 0.72; pointer-events: none; }
         .hero { display: grid; gap: 12px; margin-bottom: 24px; }
         .hero h1 {
             margin: 0;
@@ -130,7 +131,12 @@
 <body>
     <div class="shell">
         {% if app_settings.app_admin_configured %}
-            <a class="logout-button" href="{% url 'scheduler:logout' %}">Logout</a>
+            <a
+                class="logout-button"
+                href="{% url 'scheduler:logout' %}"
+                data-home-url="{% url 'scheduler:dashboard' %}"
+                data-logout-button
+            >Logout</a>
         {% endif %}
         <div class="hero">
             <h1>Drive to Meta Scheduler</h1>
@@ -148,5 +154,25 @@
         {% endif %}
         {% block content %}{% endblock %}
     </div>
+    {% if app_settings.app_admin_configured %}
+        <script>
+            document.querySelectorAll("[data-logout-button]").forEach((button) => {
+                button.addEventListener("click", async (event) => {
+                    event.preventDefault();
+                    button.setAttribute("aria-busy", "true");
+                    try {
+                        await fetch(button.href, {
+                            method: "GET",
+                            credentials: "include",
+                            cache: "no-store",
+                        });
+                    } catch (error) {
+                        // Network/browser auth prompts should not leave users parked on /logout/.
+                    }
+                    window.location.replace(button.dataset.homeUrl || "/");
+                });
+            });
+        </script>
+    {% endif %}
 </body>
 </html>
