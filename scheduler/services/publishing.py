@@ -8,6 +8,7 @@ import uuid
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -82,6 +83,7 @@ RUN_RETRY_STATUSES = (
 )
 RUN_LOCK_TTL_MINUTES = 30
 INSTAGRAM_CONTENT_LIMIT_DEFAULT = 100
+PLATFORM_PUBLISH_LOCK_TTL_SECONDS = 30 * 60
 
 
 def _scheduler_backlog_days() -> int:
@@ -533,6 +535,10 @@ def _platform_already_succeeded_for_file(target: PublishingTarget, platform: str
     ).exists()
 
 
+def _platform_publish_lock_key(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
+    return f"publish-platform:{target.id}:{platform}:{drive_file_id}"
+
+
 def _slot_is_complete(target: PublishingTarget, scheduled_for, active_platforms: set[str]) -> bool:
     if not active_platforms:
         return False
@@ -856,6 +862,27 @@ def publish_platform(
     file_obj = file_obj or _get_slot_locked_file(target, scheduled_for)
     if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
         return
+    lock_key = _platform_publish_lock_key(target, platform, file_obj["id"])
+    if not cache.add(lock_key, "1", timeout=PLATFORM_PUBLISH_LOCK_TTL_SECONDS):
+        raise PublishBackoff(
+            "Another publish run is already active for this target/platform/file.",
+            retry_at=timezone.now() + timedelta(minutes=_scheduler_partial_retry_minutes()),
+        )
+    try:
+        if _platform_already_succeeded_for_file(target, platform, file_obj["id"]):
+            return
+        _publish_platform_with_lock(target, platform, scheduled_for, file_obj, scheduled_run)
+    finally:
+        cache.delete(lock_key)
+
+
+def _publish_platform_with_lock(
+    target: PublishingTarget,
+    platform: str,
+    scheduled_for,
+    file_obj: dict,
+    scheduled_run: ScheduledPostRun | None = None,
+) -> None:
     backoff_message, retry_at = _recent_backoff(target, platform, file_obj["id"])
     if not backoff_message:
         backoff_message, retry_at = _recent_credential_backoff(target, platform)

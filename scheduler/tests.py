@@ -2760,6 +2760,30 @@ class InstagramPublishTest(TestCase):
         publish_mock.assert_called_once()
         self.assertTrue(second_target.post_logs.filter(drive_file_id=file_obj["id"], status=PostLog.STATUS_SUCCESS).exists())
 
+    def test_platform_publish_lock_prevents_parallel_duplicate_publish(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-lock", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:lock",
+            display_name="Lock Target",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file-lock", "name": "POST.mp4", "mimeType": "video/mp4"}
+
+        with patch("scheduler.services.publishing.cache.add", return_value=False), patch(
+            "scheduler.services.publishing._publish_to_instagram"
+        ) as publish_mock:
+            with self.assertRaisesMessage(PublishBackoff, "already active"):
+                publish_platform(target, SocialAccount.INSTAGRAM, file_obj=file_obj)
+
+        publish_mock.assert_not_called()
+        self.assertFalse(target.post_logs.filter(drive_file_id=file_obj["id"]).exists())
+
     def test_release_scoped_instagram_backoff_clears_other_target_credential_block(self):
         credential = MetaCredential.objects.create(label="Test", access_token="token")
         ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-release", name="IG")
