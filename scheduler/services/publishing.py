@@ -776,6 +776,8 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
                 publish = _publish_instagram_container(target.instagram_account.external_id, container_id, token)
                 return publish.get("id") or container_id
             except PublishingError as exc:
+                if _is_instagram_publish_action_limit(str(exc)) and _instagram_container_is_published(container_id, token):
+                    return container_id
                 raise InstagramContainerError(str(exc), container_id=container_id)
         except InstagramContainerError as exc:
             errors.append(f"{media_url} -> {exc}")
@@ -815,6 +817,17 @@ def _publish_instagram_container(instagram_account_id: str, container_id: str, a
         access_token,
         {"creation_id": container_id},
     )
+
+
+def _instagram_container_is_published(container_id: str, access_token: str) -> bool:
+    if not container_id:
+        return False
+    try:
+        container = _graph_get(f"/{container_id}", access_token, {"fields": "status_code,status"})
+    except PublishingError:
+        return False
+    status_code = (container.get("status_code") or container.get("status") or "").upper()
+    return status_code == "PUBLISHED"
 
 
 def _is_instagram_status_poll_auth_error(exc: PublishingError) -> bool:
