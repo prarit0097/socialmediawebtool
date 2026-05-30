@@ -773,11 +773,20 @@ def _publish_to_instagram(target: PublishingTarget, file_obj: dict) -> str:
                 except PublishingError as publish_exc:
                     raise InstagramContainerError(str(publish_exc), container_id=container_id)
             try:
+                publish_started_at = timezone.now()
                 publish = _publish_instagram_container(target.instagram_account.external_id, container_id, token)
                 return publish.get("id") or container_id
             except PublishingError as exc:
-                if _is_instagram_publish_action_limit(str(exc)) and _instagram_container_is_published(container_id, token):
-                    return container_id
+                if _is_instagram_publish_action_limit(str(exc)):
+                    if _instagram_container_is_published(container_id, token):
+                        return container_id
+                    live_media_id = _recent_instagram_media_id_after(
+                        target.instagram_account.external_id,
+                        token,
+                        publish_started_at,
+                    )
+                    if live_media_id:
+                        return live_media_id
                 raise InstagramContainerError(str(exc), container_id=container_id)
         except InstagramContainerError as exc:
             errors.append(f"{media_url} -> {exc}")
@@ -828,6 +837,43 @@ def _instagram_container_is_published(container_id: str, access_token: str) -> b
         return False
     status_code = (container.get("status_code") or container.get("status") or "").upper()
     return status_code == "PUBLISHED"
+
+
+def _parse_instagram_timestamp(value: str):
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.utc)
+    return parsed
+
+
+def _recent_instagram_media_id_after(instagram_account_id: str, access_token: str, published_after) -> str:
+    try:
+        media = _graph_get(
+            f"/{instagram_account_id}/media",
+            access_token,
+            {"fields": "id,timestamp", "limit": 5},
+        )
+    except PublishingError:
+        return ""
+    rows = media.get("data") if isinstance(media, dict) else None
+    if not isinstance(rows, list):
+        return ""
+    threshold = published_after - timedelta(minutes=2)
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        media_id = row.get("id") or ""
+        timestamp = _parse_instagram_timestamp(row.get("timestamp") or "")
+        if media_id and timestamp and timestamp >= threshold:
+            candidates.append(media_id)
+    return candidates[0] if len(candidates) == 1 else ""
 
 
 def _is_instagram_status_poll_auth_error(exc: PublishingError) -> bool:

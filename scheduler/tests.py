@@ -2708,6 +2708,87 @@ class InstagramPublishTest(TestCase):
         self.assertEqual(log.meta_creation_id, "container-live")
         self.assertEqual(log.message, "Instagram post published.")
 
+    @override_settings(PUBLIC_APP_BASE_URL="https://example.com")
+    def test_publish_platform_marks_instagram_success_when_action_limit_error_has_one_new_live_media(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig-live-list", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:live-list-after-limit",
+            display_name="IG Live List After Limit",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file-live-list", "name": "POST20.jpeg", "mimeType": "image/jpeg"}
+
+        with patch("scheduler.services.publishing._check_instagram_content_publishing_limit"), patch(
+            "scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST20.jpg"]
+        ), patch(
+            "scheduler.services.publishing._graph_get",
+            side_effect=[
+                {"status_code": "FINISHED"},
+                {"status_code": "FINISHED"},
+                {"data": [{"id": "live-media-1", "timestamp": timezone.now().isoformat()}]},
+            ],
+        ), patch(
+            "scheduler.services.publishing._graph_post",
+            side_effect=[
+                {"id": "container-live-list"},
+                PublishingError("Application request limit reached | Meta error details: type=OAuthException, code=4, subcode=2207051"),
+            ],
+        ):
+            publish_platform(target, SocialAccount.INSTAGRAM, file_obj=file_obj)
+
+        log = target.post_logs.get(platform=SocialAccount.INSTAGRAM)
+        self.assertEqual(log.status, PostLog.STATUS_SUCCESS)
+        self.assertEqual(log.meta_creation_id, "live-media-1")
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://example.com")
+    def test_publish_platform_does_not_mark_instagram_success_when_live_media_match_is_ambiguous(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform="instagram", external_id="ig-ambiguous-list", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:ambiguous-live-list",
+            display_name="IG Ambiguous Live List",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            default_caption="Caption",
+        )
+        file_obj = {"id": "file-ambiguous-list", "name": "POST21.jpeg", "mimeType": "image/jpeg"}
+        now = timezone.now().isoformat()
+
+        with patch("scheduler.services.publishing._check_instagram_content_publishing_limit"), patch(
+            "scheduler.services.publishing.get_cached_public_urls", return_value=["https://example.com/POST21.jpg"]
+        ), patch(
+            "scheduler.services.publishing._graph_get",
+            side_effect=[
+                {"status_code": "FINISHED"},
+                {"status_code": "FINISHED"},
+                {"data": [{"id": "live-media-1", "timestamp": now}, {"id": "live-media-2", "timestamp": now}]},
+            ],
+        ), patch(
+            "scheduler.services.publishing._graph_post",
+            side_effect=[
+                {"id": "container-ambiguous-list"},
+                PublishingError("Application request limit reached | Meta error details: type=OAuthException, code=4, subcode=2207051"),
+            ],
+        ):
+            with self.assertRaises(PublishingError):
+                publish_platform(target, SocialAccount.INSTAGRAM, file_obj=file_obj)
+
+        log = target.post_logs.get(platform=SocialAccount.INSTAGRAM)
+        self.assertEqual(log.status, PostLog.STATUS_FAILED)
+
     def test_instagram_content_publishing_limit_blocks_before_container_creation(self):
         from unittest.mock import patch
 
