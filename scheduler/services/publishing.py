@@ -475,6 +475,10 @@ def _active_platforms(target: PublishingTarget) -> list[str]:
     return platforms
 
 
+def _target_has_publish_config(target: PublishingTarget) -> bool:
+    return bool(target.drive_folder_id and _active_platforms(target))
+
+
 def _get_slot_locked_file(target: PublishingTarget, scheduled_for) -> dict:
     locked_file_id = (
         target.post_logs.filter(scheduled_for=scheduled_for)
@@ -1097,6 +1101,16 @@ def publish_due_targets(reference_time=None) -> dict:
         checked_targets += 1
         if processed_runs >= max_runs:
             break
+        if not _target_has_publish_config(target):
+            if not target.drive_folder_id:
+                target.last_status = "misconfigured"
+                target.last_error = "Drive folder is not configured for this target."
+                target.save(update_fields=["last_status", "last_error", "updated_at"])
+            elif not _active_platforms(target):
+                target.last_status = "misconfigured"
+                target.last_error = "No Facebook or Instagram account linked for this target."
+                target.save(update_fields=["last_status", "last_error", "updated_at"])
+            continue
         try:
             ensure_scheduled_runs(target, now)
             due_runs = list(_run_due_queryset(target, now)[:1])

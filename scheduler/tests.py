@@ -726,6 +726,46 @@ class SchedulingTest(TestCase):
         self.assertEqual(result["checked_targets"], 0)
         self.assertEqual(result["processed_runs"], 0)
 
+    @override_settings(SCHEDULER_MAX_RUNS_PER_TICK=1)
+    def test_due_runner_does_not_spend_run_cap_on_blank_drive_targets(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb_missing = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-missing", name="FB Missing", access_token="page-token")
+        PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:missing-drive",
+            display_name="A Missing Drive",
+            facebook_account=fb_missing,
+            posting_times=["09:00"],
+        )
+        fb_ready = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-ready", name="FB Ready", access_token="page-token")
+        ready_target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:ready-after-missing",
+            display_name="Z Ready Target",
+            facebook_account=fb_ready,
+            drive_folder_id="folder",
+            posting_times=["09:00"],
+        )
+        file_obj = {"id": "file-ready", "name": "POST1.jpeg", "mimeType": "image/jpeg"}
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=[file_obj]), patch(
+            "scheduler.services.publishing._publish_to_facebook",
+            return_value="fb-post",
+        ) as publish_mock:
+            result = publish_due_targets(reference_time=timezone.make_aware(datetime(2026, 3, 22, 9, 30)))
+
+        publish_mock.assert_called_once()
+        self.assertEqual(result["success"], 1)
+        self.assertEqual(result["processed_runs"], 1)
+        self.assertTrue(
+            ready_target.scheduled_runs.filter(
+                scheduled_for=timezone.make_aware(datetime(2026, 3, 22, 9, 0)),
+                status=ScheduledPostRun.STATUS_SUCCESS,
+            ).exists()
+        )
+
     @override_settings(PUBLIC_APP_BASE_URL="https://example.com", SCHEDULER_PARTIAL_RETRY_MINUTES=15, META_RATE_LIMIT_BACKOFF_MINUTES=90)
     def test_markerless_backoff_does_not_create_long_retry_window(self):
         from unittest.mock import patch
