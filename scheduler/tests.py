@@ -3012,6 +3012,60 @@ class InstagramPublishTest(TestCase):
         self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], PostLog.STATUS_SKIPPED)
         self.assertTrue(target.post_logs.filter(platform=SocialAccount.INSTAGRAM, drive_file_id="file-skip", status=PostLog.STATUS_SKIPPED).exists())
 
+    def test_reconcile_live_post_marks_verified_platform_success(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-live", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-live", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:live|ig:live",
+            display_name="Live Reconcile",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+            last_status="backoff",
+            last_error="instagram blocked",
+        )
+        run = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+            drive_file_id="file-live",
+            drive_file_name="POST.png",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.FACEBOOK: PostLog.STATUS_SUCCESS, SocialAccount.INSTAGRAM: PostLog.STATUS_FAILED},
+            next_retry_at=timezone.now() + timedelta(hours=12),
+            last_error="instagram: Application request limit reached",
+        )
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=run.scheduled_for,
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id=run.drive_file_id,
+            drive_file_name=run.drive_file_name,
+        )
+
+        output = StringIO()
+        call_command(
+            "reconcile_live_post",
+            "--target-id",
+            str(target.id),
+            "--drive-file-id",
+            "file-live",
+            "--platform",
+            SocialAccount.INSTAGRAM,
+            "--apply",
+            stdout=output,
+        )
+
+        run.refresh_from_db()
+        target.refresh_from_db()
+        self.assertIn("UPDATED", output.getvalue())
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_SUCCESS)
+        self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], PostLog.STATUS_SUCCESS)
+        self.assertIsNone(run.next_retry_at)
+        self.assertEqual(target.last_status, "success")
+        self.assertTrue(target.post_logs.filter(platform=SocialAccount.INSTAGRAM, drive_file_id="file-live", status=PostLog.STATUS_SUCCESS).exists())
+
     @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90, META_APP_RATE_LIMIT_BACKOFF_MINUTES=1440)
     def test_credential_backoff_retry_uses_original_failure_expiry(self):
         from unittest.mock import patch
