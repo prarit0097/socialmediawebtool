@@ -14,6 +14,9 @@ from scheduler.services.drive import DriveConfigError, find_caption_file, is_pub
 from scheduler.services.proxy import is_public_base_ready
 
 
+PLATFORM_TERMINAL_LOG_STATUSES = {PostLog.STATUS_SUCCESS, PostLog.STATUS_SKIPPED}
+
+
 def _cache_key(target: PublishingTarget) -> str:
     latest_log_id = target.post_logs.order_by("-created_at").values_list("id", flat=True).first() or 0
     latest_run_updated = target.scheduled_runs.order_by("-updated_at").values_list("updated_at", flat=True).first()
@@ -143,21 +146,21 @@ def build_target_health(target: PublishingTarget) -> dict:
                 active_platforms.append("facebook")
             if target.instagram_account_id:
                 active_platforms.append("instagram")
-            success_rows = list(
-                target.post_logs.filter(status=PostLog.STATUS_SUCCESS)
+            terminal_rows = list(
+                target.post_logs.filter(status__in=PLATFORM_TERMINAL_LOG_STATUSES)
                 .exclude(drive_file_id="")
                 .values("drive_file_id", "platform")
             )
-            success_map = {}
-            for row in success_rows:
-                success_map.setdefault(row["drive_file_id"], set()).add(row["platform"])
+            terminal_map = {}
+            for row in terminal_rows:
+                terminal_map.setdefault(row["drive_file_id"], set()).add(row["platform"])
             current_run = _current_run(target)
             if current_run:
                 current_file = _run_file(current_run)
                 current_file_source = "scheduled_run"
                 status_map = dict(current_run.platform_status or {})
-                succeeded = {platform for platform, status in status_map.items() if status == PostLog.STATUS_SUCCESS}
-                succeeded.update(success_map.get(current_run.drive_file_id, set()))
+                succeeded = {platform for platform, status in status_map.items() if status in PLATFORM_TERMINAL_LOG_STATUSES}
+                succeeded.update(terminal_map.get(current_run.drive_file_id, set()))
                 pending_platforms = sorted(set(active_platforms) - succeeded)
                 if not pending_platforms:
                     current_run = None
@@ -165,7 +168,7 @@ def build_target_health(target: PublishingTarget) -> dict:
                     current_file_source = ""
             if current_run is None:
                 for file_obj in media_files:
-                    succeeded = success_map.get(file_obj["id"], set())
+                    succeeded = terminal_map.get(file_obj["id"], set())
                     if set(active_platforms) and succeeded != set(active_platforms):
                         current_file = file_obj
                         current_file_source = "drive_scan"

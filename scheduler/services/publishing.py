@@ -84,6 +84,7 @@ RUN_RETRY_STATUSES = (
 RUN_LOCK_TTL_MINUTES = 30
 INSTAGRAM_CONTENT_LIMIT_DEFAULT = 100
 PLATFORM_PUBLISH_LOCK_TTL_SECONDS = 30 * 60
+PLATFORM_TERMINAL_LOG_STATUSES = {PostLog.STATUS_SUCCESS, PostLog.STATUS_SKIPPED}
 
 
 def _scheduler_backlog_days() -> int:
@@ -430,18 +431,31 @@ def _sync_run_successes(run: ScheduledPostRun, active_platforms: set[str]) -> No
         run.drive_file_id = first_log.drive_file_id
         run.drive_file_name = first_log.drive_file_name
     for platform in active_platforms:
-        if run.target.post_logs.filter(
-            scheduled_for=run.scheduled_for,
-            platform=platform,
-            status=PostLog.STATUS_SUCCESS,
-        ).exists() or (run.drive_file_id and _platform_already_succeeded_for_file(run.target, platform, run.drive_file_id)):
-            statuses[platform] = PostLog.STATUS_SUCCESS
-    if active_platforms and all(statuses.get(platform) == PostLog.STATUS_SUCCESS for platform in active_platforms):
-        run.status = ScheduledPostRun.STATUS_SUCCESS
+        terminal_status = ""
+        slot_status = (
+            run.target.post_logs.filter(
+                scheduled_for=run.scheduled_for,
+                platform=platform,
+                status__in=PLATFORM_TERMINAL_LOG_STATUSES,
+            )
+            .order_by("-created_at")
+            .values_list("status", flat=True)
+            .first()
+        )
+        if slot_status:
+            terminal_status = slot_status
+        elif run.drive_file_id:
+            terminal_status = _platform_terminal_for_file(run.target, platform, run.drive_file_id)
+        if terminal_status:
+            statuses[platform] = terminal_status
+    if active_platforms and all(statuses.get(platform) in PLATFORM_TERMINAL_LOG_STATUSES for platform in active_platforms):
+        if all(statuses.get(platform) == PostLog.STATUS_SUCCESS for platform in active_platforms):
+            run.status = ScheduledPostRun.STATUS_SUCCESS
+        else:
+            run.status = ScheduledPostRun.STATUS_SKIPPED
         run.next_retry_at = None
         run.last_error = ""
     run.platform_status = statuses
-
 
 def _locked_file_from_run(run: ScheduledPostRun) -> dict:
     if not run.drive_file_id:
@@ -510,17 +524,17 @@ def pick_next_shared_file(target: PublishingTarget) -> dict:
     files = list_folder_files(target.drive_folder_id)
     media_files = [file_obj for file_obj in files if is_publishable_media(file_obj)]
     active_platforms = set(_active_platforms(target))
-    success_rows = list(
-        target.post_logs.filter(status=PostLog.STATUS_SUCCESS)
+    terminal_rows = list(
+        target.post_logs.filter(status__in=PLATFORM_TERMINAL_LOG_STATUSES)
         .exclude(drive_file_id="")
         .values("drive_file_id", "platform")
     )
-    success_map = {}
-    for row in success_rows:
-        success_map.setdefault(row["drive_file_id"], set()).add(row["platform"])
+    terminal_map = {}
+    for row in terminal_rows:
+        terminal_map.setdefault(row["drive_file_id"], set()).add(row["platform"])
 
     for file_obj in media_files:
-        if success_map.get(file_obj["id"], set()) != active_platforms:
+        if terminal_map.get(file_obj["id"], set()) != active_platforms:
             return file_obj
     if media_files:
         raise PublishingError("All unique media files in the configured Google Drive folder have already been published on every active platform. Add new files to continue posting.")
@@ -533,6 +547,20 @@ def _platform_already_succeeded_for_file(target: PublishingTarget, platform: str
         drive_file_id=drive_file_id,
         status=PostLog.STATUS_SUCCESS,
     ).exists()
+
+
+def _platform_terminal_for_file(target: PublishingTarget, platform: str, drive_file_id: str) -> str:
+    return (
+        target.post_logs.filter(
+            platform=platform,
+            drive_file_id=drive_file_id,
+            status__in=PLATFORM_TERMINAL_LOG_STATUSES,
+        )
+        .order_by("-created_at")
+        .values_list("status", flat=True)
+        .first()
+        or ""
+    )
 
 
 def _platform_publish_lock_key(target: PublishingTarget, platform: str, drive_file_id: str) -> str:

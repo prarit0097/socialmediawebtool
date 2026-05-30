@@ -1782,6 +1782,31 @@ class SharedQueueTest(TestCase):
             target.post_logs.create(platform="instagram", scheduled_for=get_daily_slots(target)[0], status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
             self.assertEqual(pick_next_shared_file(target)["id"], "file2")
 
+    def test_skipped_platform_allows_shared_queue_to_move_forward(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb-skip", name="FB")
+        ig = credential.accounts.create(platform="instagram", external_id="ig-skip", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:skip|ig:skip",
+            display_name="Skip Pair",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+
+        from unittest.mock import patch
+        files = [
+            {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg"},
+            {"id": "file2", "name": "POST2.jpeg", "mimeType": "image/jpeg"},
+        ]
+        slot = get_daily_slots(target)[0]
+        target.post_logs.create(platform="facebook", scheduled_for=slot, status="success", drive_file_id="file1", drive_file_name="POST1.jpeg")
+        target.post_logs.create(platform="instagram", scheduled_for=slot, status="skipped", drive_file_id="file1", drive_file_name="POST1.jpeg")
+
+        with patch("scheduler.services.publishing.list_folder_files", return_value=files):
+            self.assertEqual(pick_next_shared_file(target)["id"], "file2")
+
     def test_fully_published_media_is_not_reused(self):
         credential = MetaCredential.objects.create(label="Test", access_token="token")
         fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB")
@@ -2937,6 +2962,55 @@ class InstagramPublishTest(TestCase):
         self.assertIn("reconciled=1", output.getvalue())
         self.assertEqual(run.status, ScheduledPostRun.STATUS_SUCCESS)
         self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], PostLog.STATUS_SUCCESS)
+
+    def test_skip_media_platform_marks_run_terminal_without_success_log(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-skip-command", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-skip-command", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:skip-command|ig:skip-command",
+            display_name="Skip Command",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        run = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+            drive_file_id="file-skip",
+            drive_file_name="POST.png",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.FACEBOOK: PostLog.STATUS_SUCCESS, SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_BACKOFF},
+            next_retry_at=timezone.now() + timedelta(hours=12),
+            last_error="instagram blocked",
+        )
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=run.scheduled_for,
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id=run.drive_file_id,
+            drive_file_name=run.drive_file_name,
+        )
+
+        output = StringIO()
+        call_command(
+            "skip_media_platform",
+            "--target-id",
+            str(target.id),
+            "--drive-file-id",
+            "file-skip",
+            "--platform",
+            SocialAccount.INSTAGRAM,
+            "--apply",
+            stdout=output,
+        )
+
+        run.refresh_from_db()
+        self.assertIn("UPDATED", output.getvalue())
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_SKIPPED)
+        self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], PostLog.STATUS_SKIPPED)
+        self.assertTrue(target.post_logs.filter(platform=SocialAccount.INSTAGRAM, drive_file_id="file-skip", status=PostLog.STATUS_SKIPPED).exists())
 
     @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90, META_APP_RATE_LIMIT_BACKOFF_MINUTES=1440)
     def test_credential_backoff_retry_uses_original_failure_expiry(self):
