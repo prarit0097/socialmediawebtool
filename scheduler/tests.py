@@ -2719,7 +2719,7 @@ class InstagramPublishTest(TestCase):
         self.assertEqual(target.post_logs.filter(drive_file_id=file_obj["id"]).count(), 1)
 
     @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90, META_APP_RATE_LIMIT_BACKOFF_MINUTES=1440)
-    def test_credential_rate_limit_failure_skips_other_instagram_targets_without_meta_call(self):
+    def test_instagram_publish_action_limit_does_not_block_other_credential_targets(self):
         from unittest.mock import patch
 
         credential = MetaCredential.objects.create(label="Test", access_token="token")
@@ -2751,12 +2751,85 @@ class InstagramPublishTest(TestCase):
         PostLog.objects.filter(pk=rate_log.pk).update(created_at=timezone.now() - timedelta(hours=12))
         file_obj = {"id": "new-file", "name": "POST19.mp4", "mimeType": "video/mp4"}
 
-        with patch("scheduler.services.publishing._publish_to_instagram") as publish_mock:
-            with self.assertRaisesMessage(PublishingError, "credential/platform"):
-                publish_platform(second_target, SocialAccount.INSTAGRAM, file_obj=file_obj)
+        with override_settings(PUBLIC_APP_BASE_URL="https://example.com"), patch(
+            "scheduler.services.publishing._publish_to_instagram",
+            return_value="ig-published",
+        ) as publish_mock:
+            publish_platform(second_target, SocialAccount.INSTAGRAM, file_obj=file_obj)
 
-        publish_mock.assert_not_called()
-        self.assertFalse(second_target.post_logs.filter(drive_file_id=file_obj["id"]).exists())
+        publish_mock.assert_called_once()
+        self.assertTrue(second_target.post_logs.filter(drive_file_id=file_obj["id"], status=PostLog.STATUS_SUCCESS).exists())
+
+    def test_release_scoped_instagram_backoff_clears_other_target_credential_block(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-release", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:release",
+            display_name="Release Backoff",
+            instagram_account=ig,
+            drive_folder_id="folder",
+            last_status="backoff",
+            last_error="instagram: Meta rate limit backoff active for this credential/platform.",
+        )
+        run = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+            drive_file_id="file-release",
+            drive_file_name="POST.mp4",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_BACKOFF},
+            next_retry_at=timezone.now() + timedelta(hours=12),
+            last_error="instagram: Meta rate limit backoff active for this credential/platform.",
+        )
+
+        output = StringIO()
+        call_command("release_scoped_instagram_backoff", "--credential-label", "Test", "--apply", stdout=output)
+
+        run.refresh_from_db()
+        target.refresh_from_db()
+        self.assertIn("released=1", output.getvalue())
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_PENDING)
+        self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], ScheduledPostRun.STATUS_PENDING)
+        self.assertIsNone(run.next_retry_at)
+        self.assertEqual(target.last_error, "")
+
+    def test_release_scoped_instagram_backoff_keeps_target_file_rate_limit(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-keep", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:keep",
+            display_name="Keep Backoff",
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        run = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+            drive_file_id="file-keep",
+            drive_file_name="POST.mp4",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_BACKOFF},
+            next_retry_at=timezone.now() + timedelta(hours=12),
+            last_error="instagram: Meta rate limit backoff active for this credential/platform.",
+        )
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=run.scheduled_for,
+            status=PostLog.STATUS_FAILED,
+            drive_file_id=run.drive_file_id,
+            drive_file_name=run.drive_file_name,
+            message="Application request limit reached | Meta error details: type=OAuthException, code=4, subcode=2207051",
+        )
+
+        output = StringIO()
+        call_command("release_scoped_instagram_backoff", "--credential-label", "Test", "--apply", stdout=output)
+
+        run.refresh_from_db()
+        self.assertIn("released=0", output.getvalue())
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_BACKOFF)
+        self.assertIsNotNone(run.next_retry_at)
 
     @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90, META_APP_RATE_LIMIT_BACKOFF_MINUTES=1440)
     def test_credential_backoff_retry_uses_original_failure_expiry(self):

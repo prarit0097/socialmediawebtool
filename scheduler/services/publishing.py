@@ -120,6 +120,11 @@ def _is_meta_rate_limit_error(message: str) -> bool:
     return any(marker in text for marker in RATE_LIMIT_MARKERS)
 
 
+def _is_instagram_publish_action_limit(message: str) -> bool:
+    text = (message or "").lower()
+    return "subcode=2207051" in text or "subcode: 2207051" in text or "error_subcode=2207051" in text
+
+
 def _is_transient_backoff_error(message: str) -> bool:
     text = (message or "").lower()
     return any(marker in text for marker in TRANSIENT_BACKOFF_MARKERS)
@@ -251,6 +256,8 @@ def _recent_credential_backoff(target: PublishingTarget, platform: str) -> tuple
     )
     for message, created_at in recent_messages:
         if not _is_meta_rate_limit_error(message):
+            continue
+        if platform == SocialAccount.INSTAGRAM and _is_instagram_publish_action_limit(message):
             continue
         backoff_minutes = _backoff_minutes_for_failure(message)
         if not backoff_minutes or created_at < now - timedelta(minutes=backoff_minutes):
