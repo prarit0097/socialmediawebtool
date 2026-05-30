@@ -47,6 +47,7 @@ class Command(BaseCommand):
         apply_changes = options["apply"]
         checked = 0
         released = 0
+        released_keys = set()
 
         for credential in credentials:
             runs = ScheduledPostRun.objects.filter(
@@ -61,8 +62,12 @@ class Command(BaseCommand):
                     continue
                 if self._target_file_has_active_rate_limit(run, SocialAccount.INSTAGRAM, now):
                     continue
+                release_key = (run.target_id, run.drive_file_id, SocialAccount.INSTAGRAM)
+                if release_key in released_keys:
+                    continue
 
                 released += 1
+                released_keys.add(release_key)
                 self.stdout.write(
                     "RELEASE "
                     f"run={run.id} target={run.target_id} slot={timezone.localtime(run.scheduled_for)} "

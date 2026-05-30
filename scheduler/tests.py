@@ -2794,6 +2794,46 @@ class InstagramPublishTest(TestCase):
         self.assertIsNone(run.next_retry_at)
         self.assertEqual(target.last_error, "")
 
+    def test_release_scoped_instagram_backoff_releases_one_run_per_target_file(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-release-one", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="ig:release-one",
+            display_name="Release One",
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        first = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=timezone.now() - timedelta(hours=2),
+            drive_file_id="file-release",
+            drive_file_name="POST.mp4",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_BACKOFF},
+            next_retry_at=timezone.now() + timedelta(hours=12),
+            last_error="instagram: Meta rate limit backoff active for this credential/platform.",
+        )
+        second = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+            drive_file_id="file-release",
+            drive_file_name="POST.mp4",
+            status=ScheduledPostRun.STATUS_BACKOFF,
+            platform_status={SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_BACKOFF},
+            next_retry_at=timezone.now() + timedelta(hours=12),
+            last_error="instagram: Meta rate limit backoff active for this credential/platform.",
+        )
+
+        output = StringIO()
+        call_command("release_scoped_instagram_backoff", "--credential-label", "Test", "--apply", stdout=output)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertIn("released=1", output.getvalue())
+        statuses = sorted([first.status, second.status])
+        self.assertEqual(statuses, sorted([ScheduledPostRun.STATUS_PENDING, ScheduledPostRun.STATUS_BACKOFF]))
+
     def test_release_scoped_instagram_backoff_keeps_target_file_rate_limit(self):
         credential = MetaCredential.objects.create(label="Test", access_token="token")
         ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-keep", name="IG")
@@ -2830,6 +2870,49 @@ class InstagramPublishTest(TestCase):
         self.assertIn("released=0", output.getvalue())
         self.assertEqual(run.status, ScheduledPostRun.STATUS_BACKOFF)
         self.assertIsNotNone(run.next_retry_at)
+
+    def test_reconcile_successful_scheduled_runs_marks_pending_file_complete(self):
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-reconcile", name="FB", access_token="page-token")
+        ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-reconcile", name="IG")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:reconcile|ig:reconcile",
+            display_name="Reconcile",
+            facebook_account=fb,
+            instagram_account=ig,
+            drive_folder_id="folder",
+        )
+        run = ScheduledPostRun.objects.create(
+            target=target,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+            drive_file_id="file-reconcile",
+            drive_file_name="POST.mp4",
+            status=ScheduledPostRun.STATUS_PENDING,
+            platform_status={SocialAccount.FACEBOOK: PostLog.STATUS_SUCCESS, SocialAccount.INSTAGRAM: ScheduledPostRun.STATUS_PENDING},
+        )
+        target.post_logs.create(
+            platform=SocialAccount.FACEBOOK,
+            scheduled_for=run.scheduled_for,
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id=run.drive_file_id,
+            drive_file_name=run.drive_file_name,
+        )
+        target.post_logs.create(
+            platform=SocialAccount.INSTAGRAM,
+            scheduled_for=run.scheduled_for,
+            status=PostLog.STATUS_SUCCESS,
+            drive_file_id=run.drive_file_id,
+            drive_file_name=run.drive_file_name,
+        )
+
+        output = StringIO()
+        call_command("reconcile_successful_scheduled_runs", "--target-id", str(target.id), "--apply", stdout=output)
+
+        run.refresh_from_db()
+        self.assertIn("reconciled=1", output.getvalue())
+        self.assertEqual(run.status, ScheduledPostRun.STATUS_SUCCESS)
+        self.assertEqual(run.platform_status[SocialAccount.INSTAGRAM], PostLog.STATUS_SUCCESS)
 
     @override_settings(META_RATE_LIMIT_BACKOFF_MINUTES=90, META_APP_RATE_LIMIT_BACKOFF_MINUTES=1440)
     def test_credential_backoff_retry_uses_original_failure_expiry(self):
