@@ -1007,15 +1007,29 @@ class AdminAuthGateTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Logout")
         self.assertContains(response, reverse("scheduler:logout"))
-        self.assertContains(response, 'data-home-url="/"')
-        self.assertContains(response, "credentials: \"omit\"")
+        self.assertNotContains(response, "data-logout-button")
 
     @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret", APP_ADMIN_REALM="Test Realm")
-    def test_logout_returns_basic_auth_challenge(self):
+    def test_logout_sets_logged_out_marker_and_redirects_home(self):
         response = self.client.get(reverse("scheduler:logout"))
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.headers["WWW-Authenticate"], 'Basic realm="Test Realm Logged Out"')
-        self.assertContains(response, "Logged out", status_code=401)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/")
+        self.assertEqual(response.cookies["socialposter_logged_out"].value, "1")
+
+    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    def test_logged_out_marker_blocks_cached_basic_auth_until_sign_in_again(self):
+        credentials = base64.b64encode(b"admin:secret").decode("ascii")
+        self.client.cookies["socialposter_logged_out"] = "1"
+
+        response = self.client.get(reverse("scheduler:dashboard"), HTTP_AUTHORIZATION=f"Basic {credentials}")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Logged out")
+        self.assertNotContains(response, "Drive to Meta Scheduler")
+
+        response = self.client.get("/?login=1", HTTP_AUTHORIZATION=f"Basic {credentials}")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Drive to Meta Scheduler")
+        self.assertEqual(response.cookies["socialposter_logged_out"].value, "")
 
     @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
     def test_dashboard_disable_credential_preserves_accounts_and_targets(self):
