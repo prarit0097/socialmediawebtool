@@ -19,6 +19,7 @@ class DriveConfigError(Exception):
 
 DRIVE_FILE_FIELDS = "id,name,mimeType,size,modifiedTime,md5Checksum"
 DRIVE_LIST_FILE_FIELDS = f"{DRIVE_FILE_FIELDS},createdTime,webViewLink,webContentLink"
+DRIVE_FOLDER_FIELDS = "id,name,mimeType"
 
 
 def extract_drive_folder_id(value: str) -> str:
@@ -62,6 +63,29 @@ def get_drive_file_metadata(file_id: str) -> dict:
     )
 
 
+def get_drive_folder_metadata(folder_id: str) -> dict:
+    folder_id = extract_drive_folder_id(folder_id)
+    if not folder_id:
+        raise DriveConfigError("Google Drive folder ID is required.")
+
+    service = get_drive_service()
+    try:
+        return (
+            service.files()
+            .get(
+                fileId=folder_id,
+                fields=DRIVE_FOLDER_FIELDS,
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+    except Exception as exc:
+        raise DriveConfigError(
+            "Google Drive folder is not accessible to the service account. "
+            "Share the folder with the service account email shown on this page, then retry."
+        ) from exc
+
+
 def download_drive_file(file_id: str) -> bytes:
     service = get_drive_service()
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
@@ -96,6 +120,14 @@ def list_folder_files(folder_id: str) -> list[dict]:
         raise DriveConfigError("Google Drive folder ID is required.")
 
     service = get_drive_service()
+    try:
+        service.files().get(fileId=folder_id, fields=DRIVE_FOLDER_FIELDS, supportsAllDrives=True).execute()
+    except Exception as exc:
+        raise DriveConfigError(
+            "Google Drive folder is not accessible to the service account. "
+            "Share the folder with the service account email shown on this page, then retry."
+        ) from exc
+
     files = []
     page_token = None
     while True:
@@ -107,6 +139,7 @@ def list_folder_files(folder_id: str) -> list[dict]:
                 orderBy="createdTime",
                 pageSize=1000,
                 pageToken=page_token,
+                corpora="allDrives",
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True,
             )

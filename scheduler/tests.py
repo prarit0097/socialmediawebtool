@@ -33,11 +33,12 @@ class DriveHelpersTest(TestCase):
 
     def test_list_folder_files_handles_pagination(self):
         from unittest.mock import MagicMock, patch
-        from .services.drive import DRIVE_LIST_FILE_FIELDS, list_folder_files
+        from .services.drive import DRIVE_FOLDER_FIELDS, DRIVE_LIST_FILE_FIELDS, list_folder_files
 
         service = MagicMock()
         files_resource = MagicMock()
         service.files.return_value = files_resource
+        files_resource.get.return_value.execute.return_value = {"id": "folder123", "name": "Folder"}
         files_resource.list.return_value.execute.side_effect = [
             {"files": [{"id": "1", "name": "A", "mimeType": "image/jpeg"}], "nextPageToken": "page-2"},
             {"files": [{"id": "2", "name": "B", "mimeType": "video/mp4"}]},
@@ -51,6 +52,21 @@ class DriveHelpersTest(TestCase):
         self.assertEqual(result[1]["id"], "2")
         fields_arg = files_resource.list.call_args.kwargs["fields"]
         self.assertEqual(fields_arg, f"nextPageToken,files({DRIVE_LIST_FILE_FIELDS})")
+        self.assertEqual(files_resource.get.call_args.kwargs["fields"], DRIVE_FOLDER_FIELDS)
+        self.assertEqual(files_resource.list.call_args.kwargs["corpora"], "allDrives")
+
+    def test_list_folder_files_reports_inaccessible_folder(self):
+        from unittest.mock import MagicMock, patch
+        from .services.drive import DriveConfigError, list_folder_files
+
+        service = MagicMock()
+        files_resource = MagicMock()
+        service.files.return_value = files_resource
+        files_resource.get.return_value.execute.side_effect = Exception("not found")
+
+        with patch("scheduler.services.drive.get_drive_service", return_value=service):
+            with self.assertRaisesMessage(DriveConfigError, "not accessible to the service account"):
+                list_folder_files("folder123")
 
     def test_get_drive_file_metadata_requests_cache_fingerprint_fields(self):
         from unittest.mock import MagicMock, patch
