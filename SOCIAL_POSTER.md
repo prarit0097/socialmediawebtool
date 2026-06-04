@@ -66,6 +66,20 @@ Isliye app ka goal hai:
 - exact reason dikhana
 - retry aur diagnostics better banana
 
+## Multi-User Posting — Kya Dhyaan Rakhna
+
+App ab multi-user hai: har user ka apna isolated workspace hota hai. Software level par do users ka kaam aapas me **kabhi collapse/clash nahi** karta, kyunki sab kuch per-user scoped hai (har cheez ya to user ke `target` se ya uske `credential` se keyed hai):
+- Scheduler sabhi active targets ko ek hi global loop me **independently** process karta hai.
+- `SocialAccount` uniqueness `(credential, platform, external_id)` par hai, aur `PublishingTarget.sync_key` uniqueness `(owner, sync_key)` par — isliye do alag users **same Meta page/account** apne-apne token se add kar sakte hain bina collision ke.
+- Per-file backoff, per-credential backoff, same-file dedup, aur publish lock — sab per-target/per-credential hain, isliye ek user ka backoff/lock dusre user ko block nahi karta.
+
+**Lekin agar do alag app-users SAME physical page/account par post karein** (jaise admin token A se aur doosra user token B se same `nirogidhara` par), to ye Meta-side baatein dhyaan rakho (ye app ki bug nahi, Meta ka real behaviour hai):
+1. **Meta quota share hoga.** Instagram ka publish limit (~25 posts/24h) **per account** hota hai. Same account par dono users ke posts us limit me **combined** ginenge. Limit hit hone par app gracefully **backoff** karti hai (crash nahi), post bas delay ho sakta hai.
+2. **Same content = double post.** Duplicate-prevention **per-target** hai, per-page nahi. Agar dono users same Drive folder/files post karein to page par har post **do baar** aayega. Isse bachne ke liye alag content/folder rakho.
+3. Token A aur token B se same page par post karna Meta ke hisaab se valid hai — koi token clash nahi hota.
+
+Do chhoti baatein (collapse nahi, bas dhyaan): `SCHEDULER_MAX_RUNS_PER_TICK` (default `5`) ek global per-tick cap hai jo sabhi users ke beech share hota hai (normal load ke liye kaafi; zyada users par badha sakte ho), aur daily Telegram report abhi **global** hai (sab users ka activity admin ke chat me).
+
 ## Aaj Tak Kya Bana Hai
 
 ### Core System
@@ -453,3 +467,5 @@ systemctl status socialposter-scheduler.service --no-pager
 - Naye migrations `0007_metacredential_owner_publishingtarget_owner_and_more` (owner FK add) aur `0008_assign_admin_owner` (existing rows ko admin user assign, aur `APP_ADMIN_USERNAME`/`APP_ADMIN_PASSWORD` se first admin seed) add hue hain.
 - Automated coverage 121 se badhkar **127 tests** tak gayi, including session-auth (anonymous redirect, login/logout, wrong-password) aur multi-user isolation (cross-user dashboard/target 404, per-owner sync_key no-collision, `create_app_user` command) coverage.
 - VPS deploy step: code pull karne ke baad `./.venv/bin/python manage.py migrate` zaroor chalayein taaki owner columns aur admin seeding apply ho jaye. (Agar VPS par pehle se koi `admin` Django user hai jiska password alag hai, to migration uska password reset nahi karti — us case me `manage.py changepassword admin` chala lein.)
+- VPS par live deploy verify hua: `migrate` ne `0007` + `0008` apply kiye aur `admin` user ko 2 credentials + 31 targets assign kiye; `check` clean, 127 tests OK, dono services restart hue. Existing scheduling untouched.
+- Naya `Multi-User Posting — Kya Dhyaan Rakhna` section add kiya gaya: confirm kiya gaya ki software level par cross-user koi collapse nahi (sab per-target/per-credential scoped), aur same physical page par do users ke posting ke real-world dhyaan-points (Meta shared quota, same-content double-post, global Telegram report, shared per-tick run cap) document kiye gaye.
