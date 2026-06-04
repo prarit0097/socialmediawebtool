@@ -24,7 +24,8 @@ Simple words me:
 - Instagram ke liye image aur video/reels flow try kar sakti hai
 - Telegram par daily report bhej sakti hai
 - recent logs aur health status dikha sakti hai
-- optional app-admin credentials ke saath dashboard access ko protect kar sakti hai
+- multi-user login panel de sakti hai: har user apna alag isolated workspace (apne Meta tokens, scheduling, targets, aur logs) dekhta hai
+- proper login page (`/login/`) ke saath Django session-based authentication kar sakti hai
 - cached media based publishing readiness audit aur metrics export command de sakti hai
 
 ## App Ka Flow Kaise Kaam Karta Hai
@@ -151,6 +152,12 @@ python manage.py run_scheduler
 .\.venv\Scripts\python.exe manage.py send_daily_report --date 2026-03-21 --force
 ```
 
+### Naya Login User Banana
+```powershell
+.\.venv\Scripts\python.exe manage.py create_app_user --username riya --password "StrongPass123!"
+# full-access admin ke liye: --superuser, optional: --email riya@example.com
+```
+
 ### Tests
 ```powershell
 .\.venv\Scripts\python.exe manage.py test
@@ -266,6 +273,7 @@ systemctl status socialposter-scheduler.service --no-pager
 - Meta token sync ab non-destructive hai: naya/updated token save karne par same Facebook/Instagram page IDs ki existing Drive folder mapping, posting times, captions, AI settings, active status, cached media, aur post history preserve rehti hai. Sirf genuinely new pages/profiles new setup rows ke roop me add honge.
 - Multi-token sync ab safer hai: agar new Meta token me koi page/account pehle se kisi aur saved token ke under configured hai, app us existing target ko move ya overwrite nahi karegi. Duplicate ko skip karke original target ki settings, token ownership, cached media, aur history same rakhegi.
 - Code review ke baad extra hardening bhi active hai: `caption.txt` ab public Google URL se nahi balki service-account Drive download se read hota hai, `PUBLIC_APP_BASE_URL` ko real HTTPS URL hona zaroori hai, Meta sync non-JSON response ko clean error me dikhata hai, aur Facebook binary upload large video ko memory me poora load kiye bina stream karta hai.
+- Multi-user login ab live hai: har user apna isolated workspace dekhta hai, login proper `/login/` page se hota hai, naye users `create_app_user` command se banaye jaate hain, aur existing `admin` ka data + scheduling migration se preserve rehti hai (scheduler global). Telegram + AI abhi global hain.
 
 ## Last Update
 2026-03-21
@@ -433,3 +441,15 @@ systemctl status socialposter-scheduler.service --no-pager
 - Drive/media cache hardening add hua. Drive metadata requests ab `size`, `modifiedTime`, aur `md5Checksum` include karte hain, blank legacy cache fingerprints refresh ko skip nahi karte, video cache downloads stream to disk, aur cache materialization failure `MediaAsset.status=failed` + `last_error` me persist hota hai. Agar already-ready cached file refresh fail ho jaye to old usable local file ready rakhi jati hai.
 - Health/diagnostics ab due locked scheduled run ko prefer karte hain jab run file already assigned ho. Future/backoff-deferred runs current file ko override nahi karte. `diagnose_posting_today` scheduled runs ke liye run id, Drive file id, MIME, platform status, `next_retry_at`, attempts, aur lock state print karta hai, taaki backoff expiry manually shell command ke bina visible ho.
 - Partial success retry spam reduce hua. Agar ek platform success aur doosra hard fail ho, run `partial_success` me same file locked rakhta hai but immediate next tick par retry nahi karta; `SCHEDULER_PARTIAL_RETRY_MINUTES` default `15` minutes hai. Permanent partial failures `SCHEDULER_PARTIAL_MAX_ATTEMPTS` default `3` ke baad terminal `failed` ho jate hain, taaki newer slots starve na hon.
+2026-06-04
+- **Per-user login panel add kiya gaya.** Ab har user apna isolated workspace dekhta hai: apne Meta tokens, apni scheduling/targets, aur apne posting logs. Ek user dusre user ke credentials, targets, ya logs na dashboard par dekh sakta hai aur na hi unhe sync/open kar sakta hai.
+- Existing `admin` ka saara setup data migration se preserve hua hai. Purane `MetaCredential` aur `PublishingTarget` rows ab `admin` user ke owner ho gaye, aur uski scheduling bilkul untouched chal rahi hai — scheduler global hi rehta hai aur sabhi active targets ko owner ke hisaab se distinguish kiye bina process karta hai.
+- Naye users ab management command se banaye jaate hain: `python manage.py create_app_user --username <name> --password <pass>` (optional `--email <email>`, aur full-access admin ke liye `--superuser`). Sirf superuser hi dashboard ke `run_due_posts` aur `send_report` quick actions chala sakta hai.
+- Login ab proper login page (`/login/`) se hota hai. Purana HTTP Basic auth gate hata diya gaya hai; ab Django session-based login use hota hai aur `/logout/` proper logout karke wapas login page par bhej deta hai.
+- Telegram reporting aur AI features abhi global hi hain (future me per-user banaya ja sakta hai).
+- Naye migrations `0007_metacredential_owner_publishingtarget_owner_and_more` (owner FK add) aur `0008_assign_admin_owner` (existing rows ko admin user assign, aur `APP_ADMIN_USERNAME`/`APP_ADMIN_PASSWORD` se first admin seed) add hue hain.
+- Same Meta page/account ab do alag users add kar sakte hain bina collision ke: `PublishingTarget.sync_key` ki uniqueness ab global nahi, balki per-owner (`owner + sync_key`) hai. Meta sync bhi owner-aware ho gaya hai — ek user ke token ka page dusre user ke configured page ko duplicate maankar skip nahi karta.
+- Existing `admin` ka data verify hua: 1 credential + 23 targets `admin` ko assign hue, 0 orphaned; scheduler ne sabhi 23 active targets ko global process kiya (scheduling untouched). Naya test user banane par uska dashboard bilkul khaali (fresh) mila.
+- Naye migrations `0007_metacredential_owner_publishingtarget_owner_and_more` (owner FK add) aur `0008_assign_admin_owner` (existing rows ko admin user assign, aur `APP_ADMIN_USERNAME`/`APP_ADMIN_PASSWORD` se first admin seed) add hue hain.
+- Automated coverage 121 se badhkar **127 tests** tak gayi, including session-auth (anonymous redirect, login/logout, wrong-password) aur multi-user isolation (cross-user dashboard/target 404, per-owner sync_key no-collision, `create_app_user` command) coverage.
+- VPS deploy step: code pull karne ke baad `./.venv/bin/python manage.py migrate` zaroor chalayein taaki owner columns aur admin seeding apply ho jaye. (Agar VPS par pehle se koi `admin` Django user hai jiska password alag hai, to migration uska password reset nahi karti — us case me `manage.py changepassword admin` chala lein.)

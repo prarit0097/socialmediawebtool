@@ -6,13 +6,15 @@ from django.db import close_old_connections
 from django.http import FileResponse, HttpResponse
 from django.core.signing import BadSignature, SignatureExpired
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login as auth_login, logout as auth_logout
+from django.contrib.auth.forms import AuthenticationForm
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 
 from .forms import MetaCredentialForm, PublishingTargetForm
 from .models import AIMediaInsight, MediaAsset, MetaCredential, MetaCredentialEvent, PublishingTarget
-from .services.auth import app_admin_required, logout_response
 from .services.ai import AIServiceError, ai_is_configured, get_or_generate_media_insight
 from .services.credential_lifecycle import archive_credential_from_request, record_credential_event, restore_credential_from_request
 from .services.drive import download_drive_file, get_drive_file_metadata
@@ -44,19 +46,38 @@ def _run_test_post_async(target_id: int) -> None:
         close_old_connections()
 
 
+@require_http_methods(["GET", "POST"])
+def login_view(request):
+    if request.method == "POST":
+        form = AuthenticationForm(request, data=request.POST)
+        if form.is_valid():
+            auth_login(request, form.get_user())
+            next_url = request.POST.get("next") or request.GET.get("next")
+            return redirect(next_url) if next_url else redirect("scheduler:dashboard")
+        return render(request, "scheduler/login.html", {"form": form, "next": request.GET.get("next", "")})
+
+    if request.user.is_authenticated:
+        return redirect("scheduler:dashboard")
+    form = AuthenticationForm(request)
+    return render(request, "scheduler/login.html", {"form": form, "next": request.GET.get("next", "")})
+
+
 def logout(request):
-    return logout_response()
+    auth_logout(request)
+    return redirect("scheduler:login")
 
 
 @require_http_methods(["GET", "POST"])
-@app_admin_required
+@login_required
 def dashboard(request):
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "add_token":
             form = MetaCredentialForm(request.POST)
             if form.is_valid():
-                credential = form.save()
+                credential = form.save(commit=False)
+                credential.owner = request.user
+                credential.save()
                 record_credential_event(
                     credential,
                     action=MetaCredentialEvent.ACTION_CREATED,
@@ -81,7 +102,7 @@ def dashboard(request):
                     messages.error(request, f"Token saved, but sync failed: {exc}")
                 return redirect("scheduler:dashboard")
         elif action == "sync_credential":
-            credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
+            credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"), owner=request.user)
             if not credential.is_active:
                 messages.error(request, f"{credential.label} is disabled. Re-enable the credential before syncing.")
                 return redirect("scheduler:dashboard")
@@ -95,18 +116,21 @@ def dashboard(request):
                 messages.error(request, f"Sync failed: {exc}")
             return redirect("scheduler:dashboard")
         elif action == "delete_credential":
-            credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
+            credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"), owner=request.user)
             label = credential.label
             archive_credential_from_request(credential, request, source="dashboard")
             messages.success(request, f"{label} archived. Existing accounts and targets were preserved.")
             return redirect("scheduler:dashboard")
         elif action == "restore_credential":
-            credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"))
+            credential = get_object_or_404(MetaCredential, pk=request.POST.get("credential_id"), owner=request.user)
             label = credential.label
             restore_credential_from_request(credential, request, source="dashboard")
             messages.success(request, f"{label} restored. Sync accounts to refresh Meta assets.")
             return redirect("scheduler:dashboard")
         elif action == "run_due_posts":
+            if not request.user.is_superuser:
+                messages.error(request, "Only the admin can run this action.")
+                return redirect("scheduler:dashboard")
             result = publish_due_targets()
             messages.success(
                 request,
@@ -120,6 +144,9 @@ def dashboard(request):
             )
             return redirect("scheduler:dashboard")
         elif action == "send_report":
+            if not request.user.is_superuser:
+                messages.error(request, "Only the admin can run this action.")
+                return redirect("scheduler:dashboard")
             report = send_daily_report()
             messages.success(request, report["status_message"])
             return redirect("scheduler:dashboard")
@@ -127,7 +154,7 @@ def dashboard(request):
         form = MetaCredentialForm()
 
     targets = list(
-        PublishingTarget.objects.select_related("facebook_account", "instagram_account", "credential").annotate(
+        PublishingTarget.objects.filter(owner=request.user).select_related("facebook_account", "instagram_account", "credential").annotate(
             ready_media_asset_count=Count("media_assets", filter=Q(media_assets__status="ready"))
         )
     )
@@ -146,7 +173,7 @@ def dashboard(request):
     ]
     context = {
         "form": form,
-        "credentials": MetaCredential.objects.prefetch_related("targets").all(),
+        "credentials": MetaCredential.objects.filter(owner=request.user).prefetch_related("targets"),
         "active_scheduled_targets": active_scheduled_targets,
         "connected_targets": [item for item in target_items if item["target"].is_connected_pair],
         "unconnected_targets": [item for item in target_items if not item["target"].is_connected_pair],
@@ -155,10 +182,10 @@ def dashboard(request):
 
 
 @require_http_methods(["GET", "POST"])
-@app_admin_required
+@login_required
 def target_detail(request, pk):
     target = get_object_or_404(
-        PublishingTarget.objects.select_related("facebook_account", "instagram_account", "credential"),
+        PublishingTarget.objects.filter(owner=request.user).select_related("facebook_account", "instagram_account", "credential"),
         pk=pk,
     )
     if request.method == "POST":

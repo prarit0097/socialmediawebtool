@@ -168,6 +168,7 @@ def _find_existing_target(
     facebook_id: str = "",
     instagram_id: str = "",
     credential: MetaCredential | None = None,
+    owner=None,
 ) -> PublishingTarget | None:
     conditions = _target_lookup_conditions(facebook_id=facebook_id, instagram_id=instagram_id)
     if not conditions:
@@ -176,6 +177,8 @@ def _find_existing_target(
     queryset = PublishingTarget.objects.filter(conditions)
     if credential is not None:
         queryset = queryset.filter(credential=credential)
+    if owner is not None:
+        queryset = queryset.filter(owner=owner)
 
     candidates = list(
         queryset
@@ -241,7 +244,9 @@ def _apply_target_links(
     if target.last_error and target.last_error.startswith(SYNC_WARNING_PREFIXES):
         target.last_error = ""
         update_fields.append("last_error")
-    sync_key_conflict = PublishingTarget.objects.filter(sync_key=sync_key).exclude(pk=target.pk).exists()
+    sync_key_conflict = (
+        PublishingTarget.objects.filter(owner=target.owner, sync_key=sync_key).exclude(pk=target.pk).exists()
+    )
     if not sync_key_conflict and target.sync_key != sync_key:
         target.sync_key = sync_key
         update_fields.append("sync_key")
@@ -270,13 +275,14 @@ def _get_or_create_target(
         )
         return target, False, False
 
-    target = _find_existing_target(facebook_id=facebook_id, instagram_id=instagram_id)
+    target = _find_existing_target(facebook_id=facebook_id, instagram_id=instagram_id, owner=credential.owner)
     if target and target.credential_id != credential.id:
         return None, False, True
 
     return (
         PublishingTarget.objects.create(
             credential=credential,
+            owner=credential.owner,
             sync_key=sync_key,
             display_name=display_name,
             facebook_account=facebook_account,

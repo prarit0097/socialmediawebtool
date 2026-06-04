@@ -1,16 +1,18 @@
-import base64
 from datetime import datetime, time, timedelta
 from io import BytesIO, StringIO
 from pathlib import Path
 import tempfile
 
 from PIL import Image
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.cache import cache
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils import timezone
+
+User = get_user_model()
 
 from .forms import PublishingTargetForm
 from .models import MediaAsset, MetaCredential, MetaCredentialEvent, PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
@@ -1009,51 +1011,65 @@ class ProxyHelpersTest(TestCase):
         self.assertFalse(is_public_base_ready())
 
 
-class AdminAuthGateTest(TestCase):
-    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
-    def test_dashboard_requires_basic_auth_when_admin_credentials_are_configured(self):
+@override_settings(SECURE_SSL_REDIRECT=False)
+class SessionAuthTest(TestCase):
+    def setUp(self):
+        self.password = "Sup3r-Secret-Pass!"
+        self.user = User.objects.create_user(username="auth-user", password=self.password)
+
+    def test_anonymous_dashboard_redirects_to_login(self):
         response = self.client.get(reverse("scheduler:dashboard"))
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("Basic", response.headers["WWW-Authenticate"])
-
-    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
-    def test_dashboard_allows_valid_basic_auth(self):
-        credentials = base64.b64encode(b"admin:secret").decode("ascii")
-        response = self.client.get(reverse("scheduler:dashboard"), HTTP_AUTHORIZATION=f"Basic {credentials}")
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Logout")
-        self.assertContains(response, reverse("scheduler:logout"))
-        self.assertNotContains(response, "data-logout-button")
-
-    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret", APP_ADMIN_REALM="Test Realm")
-    def test_logout_sets_logged_out_marker_and_redirects_home(self):
-        response = self.client.get(reverse("scheduler:logout"))
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/")
-        self.assertEqual(response.cookies["socialposter_logged_out"].value, "1")
+        self.assertIn("/login/", response.url)
 
-    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
-    def test_logged_out_marker_blocks_cached_basic_auth_until_sign_in_again(self):
-        credentials = base64.b64encode(b"admin:secret").decode("ascii")
-        self.client.cookies["socialposter_logged_out"] = "1"
-
-        response = self.client.get(reverse("scheduler:dashboard"), HTTP_AUTHORIZATION=f"Basic {credentials}")
+    def test_login_page_renders_password_field(self):
+        response = self.client.get(reverse("scheduler:login"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Logged out")
-        self.assertNotContains(response, "Drive to Meta Scheduler")
+        self.assertContains(response, 'type="password"')
 
-        response = self.client.get("/?login=1", HTTP_AUTHORIZATION=f"Basic {credentials}")
+    def test_valid_login_redirects_to_dashboard_and_grants_access(self):
+        response = self.client.post(
+            reverse("scheduler:login"),
+            {"username": "auth-user", "password": self.password},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("scheduler:dashboard"))
+
+        dashboard_response = self.client.get(reverse("scheduler:dashboard"))
+        self.assertEqual(dashboard_response.status_code, 200)
+
+    def test_wrong_password_re_renders_login_without_authenticating(self):
+        response = self.client.post(
+            reverse("scheduler:login"),
+            {"username": "auth-user", "password": "wrong-password"},
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Drive to Meta Scheduler")
-        self.assertEqual(response.cookies["socialposter_logged_out"].value, "")
+        self.assertFalse(response.wsgi_request.user.is_authenticated)
 
-    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
+    def test_logout_redirects_to_login_and_revokes_dashboard_access(self):
+        self.client.force_login(self.user)
+
+        logout_response = self.client.get(reverse("scheduler:logout"))
+        self.assertEqual(logout_response.status_code, 302)
+        self.assertIn("/login/", logout_response.url)
+
+        dashboard_response = self.client.get(reverse("scheduler:dashboard"))
+        self.assertEqual(dashboard_response.status_code, 302)
+        self.assertIn("/login/", dashboard_response.url)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class DashboardCredentialActionTest(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_superuser(username="dash-admin", password="Sup3r-Secret-Pass!")
+        self.client.force_login(self.user)
+
     def test_dashboard_disable_credential_preserves_accounts_and_targets(self):
-        credentials = base64.b64encode(b"admin:secret").decode("ascii")
-        credential = MetaCredential.objects.create(label="Token A", access_token="token-a")
+        credential = MetaCredential.objects.create(label="Token A", access_token="token-a", owner=self.user)
         fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-a", name="Page A")
         target = PublishingTarget.objects.create(
             credential=credential,
+            owner=self.user,
             sync_key="fb:fb-a",
             display_name="Page A",
             facebook_account=fb,
@@ -1062,7 +1078,6 @@ class AdminAuthGateTest(TestCase):
         response = self.client.post(
             reverse("scheduler:dashboard"),
             {"action": "delete_credential", "credential_id": credential.id},
-            HTTP_AUTHORIZATION=f"Basic {credentials}",
         )
 
         self.assertEqual(response.status_code, 302)
@@ -1077,13 +1092,12 @@ class AdminAuthGateTest(TestCase):
         self.assertEqual(event.snapshot["credential"]["id"], credential.id)
         self.assertEqual(event.snapshot["targets"][0]["id"], target.id)
 
-    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
     def test_dashboard_restore_credential_reactivates_previously_active_targets(self):
-        credentials = base64.b64encode(b"admin:secret").decode("ascii")
-        credential = MetaCredential.objects.create(label="Token A", access_token="token-a")
+        credential = MetaCredential.objects.create(label="Token A", access_token="token-a", owner=self.user)
         fb = credential.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-a", name="Page A")
         active_target = PublishingTarget.objects.create(
             credential=credential,
+            owner=self.user,
             sync_key="fb:fb-a",
             display_name="Page A",
             facebook_account=fb,
@@ -1091,6 +1105,7 @@ class AdminAuthGateTest(TestCase):
         )
         inactive_target = PublishingTarget.objects.create(
             credential=credential,
+            owner=self.user,
             sync_key="fb:fb-b",
             display_name="Page B",
             is_active=False,
@@ -1098,13 +1113,11 @@ class AdminAuthGateTest(TestCase):
         self.client.post(
             reverse("scheduler:dashboard"),
             {"action": "delete_credential", "credential_id": credential.id},
-            HTTP_AUTHORIZATION=f"Basic {credentials}",
         )
 
         response = self.client.post(
             reverse("scheduler:dashboard"),
             {"action": "restore_credential", "credential_id": credential.id},
-            HTTP_AUTHORIZATION=f"Basic {credentials}",
         )
 
         self.assertEqual(response.status_code, 302)
@@ -1116,18 +1129,15 @@ class AdminAuthGateTest(TestCase):
         self.assertFalse(inactive_target.is_active)
         self.assertTrue(MetaCredentialEvent.objects.filter(action=MetaCredentialEvent.ACTION_RESTORED, credential=credential).exists())
 
-    @override_settings(DEBUG=False, SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="admin", APP_ADMIN_PASSWORD="secret")
     def test_dashboard_rejects_sync_for_disabled_credential(self):
         from unittest.mock import patch
 
-        credentials = base64.b64encode(b"admin:secret").decode("ascii")
-        credential = MetaCredential.objects.create(label="Disabled Token", access_token="token-a", is_active=False)
+        credential = MetaCredential.objects.create(label="Disabled Token", access_token="token-a", is_active=False, owner=self.user)
 
         with patch("scheduler.views.sync_credential_accounts") as sync_mock:
             response = self.client.post(
                 reverse("scheduler:dashboard"),
                 {"action": "sync_credential", "credential_id": credential.id},
-                HTTP_AUTHORIZATION=f"Basic {credentials}",
                 follow=True,
             )
 
@@ -1145,8 +1155,115 @@ class AdminAuthGateTest(TestCase):
         self.assertFalse(PublishingTargetAdmin(PublishingTarget, site).has_delete_permission(None))
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
+class MultiUserIsolationTest(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(username="user-a", password="Sup3r-Secret-Pass!")
+        self.user_b = User.objects.create_user(username="user-b", password="Sup3r-Secret-Pass!")
+
+        self.credential_a = MetaCredential.objects.create(label="Token A", access_token="token-a", owner=self.user_a)
+        fb_a = self.credential_a.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-a", name="Page A")
+        self.target_a = PublishingTarget.objects.create(
+            credential=self.credential_a,
+            owner=self.user_a,
+            sync_key="fb:fb-a",
+            display_name="Alpha Workspace Page",
+            facebook_account=fb_a,
+        )
+
+        self.credential_b = MetaCredential.objects.create(label="Token B", access_token="token-b", owner=self.user_b)
+        fb_b = self.credential_b.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-b", name="Page B")
+        self.target_b = PublishingTarget.objects.create(
+            credential=self.credential_b,
+            owner=self.user_b,
+            sync_key="fb:fb-b",
+            display_name="Bravo Workspace Page",
+            facebook_account=fb_b,
+        )
+
+    def test_dashboard_shows_only_owners_targets(self):
+        self.client.force_login(self.user_a)
+
+        response = self.client.get(reverse("scheduler:dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Alpha Workspace Page")
+        self.assertNotContains(response, "Bravo Workspace Page")
+
+        owned_targets = list(response.context["connected_targets"]) + list(response.context["unconnected_targets"])
+        owned_pks = {item["target"].pk for item in owned_targets}
+        self.assertIn(self.target_a.pk, owned_pks)
+        self.assertNotIn(self.target_b.pk, owned_pks)
+
+    def test_target_detail_for_other_users_target_returns_404(self):
+        self.client.force_login(self.user_a)
+
+        response = self.client.get(reverse("scheduler:target_detail", args=[self.target_b.pk]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_cross_user_sync_credential_does_not_sync_other_users_credential(self):
+        from unittest.mock import patch
+
+        self.client.force_login(self.user_a)
+
+        with patch("scheduler.views.sync_credential_accounts") as sync_mock:
+            response = self.client.post(
+                reverse("scheduler:dashboard"),
+                {"action": "sync_credential", "credential_id": self.credential_b.id},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        sync_mock.assert_not_called()
+
+    def test_same_sync_key_under_different_owners_does_not_collide(self):
+        shared_credential_a = MetaCredential.objects.create(label="Shared A", access_token="shared-a", owner=self.user_a)
+        shared_credential_b = MetaCredential.objects.create(label="Shared B", access_token="shared-b", owner=self.user_b)
+
+        first = PublishingTarget.objects.create(
+            credential=shared_credential_a,
+            owner=self.user_a,
+            sync_key="fb:shared-page",
+            display_name="Shared Page (A)",
+        )
+        second = PublishingTarget.objects.create(
+            credential=shared_credential_b,
+            owner=self.user_b,
+            sync_key="fb:shared-page",
+            display_name="Shared Page (B)",
+        )
+
+        self.assertNotEqual(first.pk, second.pk)
+        self.assertEqual(
+            PublishingTarget.objects.filter(sync_key="fb:shared-page").count(),
+            2,
+        )
+
+    def test_create_app_user_command_creates_authenticatable_user(self):
+        from django.contrib.auth import authenticate
+
+        call_command(
+            "create_app_user",
+            "--username",
+            "minted-user",
+            "--password",
+            "Sup3r-Secret-Pass!",
+            "--email",
+            "minted@example.com",
+        )
+
+        created = User.objects.get(username="minted-user")
+        self.assertEqual(created.email, "minted@example.com")
+        self.assertFalse(created.is_superuser)
+        self.assertIsNotNone(authenticate(username="minted-user", password="Sup3r-Secret-Pass!"))
+
+
 @override_settings(SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
 class DashboardTargetListTest(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_superuser(username="list-admin", password="Sup3r-Secret-Pass!")
+        self.client.force_login(self.user)
+
     def test_dashboard_add_token_persists_credential_and_redirect_shows_it(self):
         from unittest.mock import patch
 
@@ -1187,7 +1304,7 @@ class DashboardTargetListTest(TestCase):
         from unittest.mock import patch
         from .services.meta import MetaAPIError
 
-        credential = MetaCredential.objects.create(label="Existing Token", access_token="token-existing")
+        credential = MetaCredential.objects.create(label="Existing Token", access_token="token-existing", owner=self.user)
 
         with patch("scheduler.views.sync_credential_accounts", side_effect=MetaAPIError("Meta unavailable")):
             response = self.client.post(
@@ -1202,18 +1319,20 @@ class DashboardTargetListTest(TestCase):
         self.assertContains(response, "Sync failed: Meta unavailable")
 
     def test_dashboard_shows_targets_from_multiple_tokens_with_credential_labels(self):
-        credential_a = MetaCredential.objects.create(label="Token A", access_token="token-a")
-        credential_b = MetaCredential.objects.create(label="Token B", access_token="token-b")
+        credential_a = MetaCredential.objects.create(label="Token A", access_token="token-a", owner=self.user)
+        credential_b = MetaCredential.objects.create(label="Token B", access_token="token-b", owner=self.user)
         fb_a = credential_a.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-a", name="Page A")
         fb_b = credential_b.accounts.create(platform=SocialAccount.FACEBOOK, external_id="fb-b", name="Page B")
         PublishingTarget.objects.create(
             credential=credential_a,
+            owner=self.user,
             sync_key="fb:fb-a",
             display_name="Page A",
             facebook_account=fb_a,
         )
         PublishingTarget.objects.create(
             credential=credential_b,
+            owner=self.user,
             sync_key="fb:fb-b",
             display_name="Page B",
             facebook_account=fb_b,
@@ -1230,10 +1349,11 @@ class DashboardTargetListTest(TestCase):
     def test_dashboard_renders_queue_backoff_and_content_hints(self):
         from unittest.mock import patch
 
-        credential = MetaCredential.objects.create(label="Token A", access_token="token-a")
+        credential = MetaCredential.objects.create(label="Token A", access_token="token-a", owner=self.user)
         ig = credential.accounts.create(platform=SocialAccount.INSTAGRAM, external_id="ig-a", name="IG A")
         target = PublishingTarget.objects.create(
             credential=credential,
+            owner=self.user,
             sync_key="ig:dashboard",
             display_name="Dashboard Queue",
             instagram_account=ig,
@@ -1668,13 +1788,18 @@ class AIServiceTest(TestCase):
 
 @override_settings(SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
 class AIViewFlowTest(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_superuser(username="ai-admin", password="Sup3r-Secret-Pass!")
+        self.client.force_login(self.user)
+
     @override_settings(AI_API_KEY="test-key", SECURE_SSL_REDIRECT=False, APP_ADMIN_USERNAME="", APP_ADMIN_PASSWORD="")
     def test_generate_insight_and_apply_caption_buttons_work(self):
         from unittest.mock import patch
 
-        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        credential = MetaCredential.objects.create(label="Test", access_token="token", owner=self.user)
         target = PublishingTarget.objects.create(
             credential=credential,
+            owner=self.user,
             sync_key="fb:view1",
             display_name="AI View",
             drive_folder_id="folder",
@@ -1724,9 +1849,10 @@ class AIViewFlowTest(TestCase):
         self.assertEqual(target.default_caption, "Primary caption from AI\n\n#fit #fresh")
 
     def test_target_detail_renders_ai_meta_without_template_error(self):
-        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        credential = MetaCredential.objects.create(label="Test", access_token="token", owner=self.user)
         target = PublishingTarget.objects.create(
             credential=credential,
+            owner=self.user,
             sync_key="fb:view2",
             display_name="AI Meta View",
             drive_folder_id="folder",
@@ -1752,9 +1878,10 @@ class AIViewFlowTest(TestCase):
     def test_test_post_starts_in_background_and_redirects(self):
         from unittest.mock import patch
 
-        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        credential = MetaCredential.objects.create(label="Test", access_token="token", owner=self.user)
         target = PublishingTarget.objects.create(
             credential=credential,
+            owner=self.user,
             sync_key="fb:view3",
             display_name="Async Test Post",
             drive_folder_id="folder",

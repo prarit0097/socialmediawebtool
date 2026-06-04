@@ -59,6 +59,25 @@ python manage.py migrate
 python manage.py runserver
 ```
 
+## User accounts / login
+The dashboard and target pages require a logged-in user. Access is per-user and isolated: each user only sees and manages their own Meta credentials, publishing targets, and logs.
+
+- Login is handled through the login page at `/login/` (Django session-based authentication). Visiting any protected page while signed out redirects you to `/login/`. Signing out via `/logout/` ends the session and returns you to the login page.
+- The first admin user is seeded automatically during migration (`0008_assign_admin_owner`) from `APP_ADMIN_USERNAME` / `APP_ADMIN_PASSWORD`. If `APP_ADMIN_PASSWORD` is not set when the migration runs, set a password afterward with `python manage.py changepassword <username>`. All pre-existing credentials and targets are assigned to this admin user.
+- Create additional login users with the `create_app_user` management command:
+
+```powershell
+python manage.py create_app_user --username editor --password "Sup3r-Secret-Pass!"
+python manage.py create_app_user --username editor --password "Sup3r-Secret-Pass!" --email editor@example.com
+python manage.py create_app_user --username owner --password "Sup3r-Secret-Pass!" --superuser
+```
+
+Flags:
+- `--username` (required): login username.
+- `--password` (required): password (validated against Django's password rules).
+- `--email` (optional): email address for the user.
+- `--superuser` (optional): grants full access, including the dashboard `Run due posts` and `Send report` quick actions, which are restricted to superusers.
+
 ## Required Environment Variables
 Set these in `.env`:
 

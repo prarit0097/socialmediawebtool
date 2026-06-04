@@ -6,7 +6,8 @@ from .services.credential_lifecycle import archive_credential, restore_credentia
 
 @admin.register(MetaCredential)
 class MetaCredentialAdmin(admin.ModelAdmin):
-    list_display = ("label", "user_name", "user_id", "is_active", "last_sync_at")
+    list_display = ("label", "owner", "user_name", "user_id", "is_active", "last_sync_at")
+    list_filter = ("owner", "is_active")
     search_fields = ("label", "user_name", "user_id")
     actions = ["archive_credentials", "restore_credentials"]
 
@@ -42,8 +43,8 @@ class SocialAccountAdmin(admin.ModelAdmin):
 
 @admin.register(PublishingTarget)
 class PublishingTargetAdmin(admin.ModelAdmin):
-    list_display = ("display_name", "credential", "posts_per_day", "ai_enabled", "ai_auto_caption_enabled", "is_active", "last_status")
-    list_filter = ("is_active", "ai_enabled", "ai_auto_caption_enabled")
+    list_display = ("display_name", "owner", "credential", "posts_per_day", "ai_enabled", "ai_auto_caption_enabled", "is_active", "last_status")
+    list_filter = ("owner", "is_active", "ai_enabled", "ai_auto_caption_enabled")
     search_fields = ("display_name", "drive_folder_id")
 
     def has_delete_permission(self, request, obj=None):

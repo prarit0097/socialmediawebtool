@@ -6,6 +6,7 @@ app_name = "scheduler"
 
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
+    path("login/", views.login_view, name="login"),
     path("logout/", views.logout, name="logout"),
     path("targets/<int:pk>/", views.target_detail, name="target_detail"),
     path("media-proxy/<str:token>/<path:filename>/", views.media_proxy, name="media_proxy"),

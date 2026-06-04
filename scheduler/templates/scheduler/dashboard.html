@@ -49,6 +49,7 @@
                 <button type="submit">Save token and sync</button>
             </form>
         </section>
+        {% if user.is_superuser %}
         <section class="card">
             <h3>Quick Actions</h3>
             <div class="actions">
@@ -65,6 +66,7 @@
             </div>
             <p class="muted">Google Drive folder ko configured service account email ke saath share karein, phir folder URL ya ID row level par set karein.</p>
         </section>
+        {% endif %}
         <section class="card">
             <h3>Credentials</h3>
             <div class="row-list">
