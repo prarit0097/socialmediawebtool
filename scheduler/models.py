@@ -1,10 +1,12 @@
 from datetime import time
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 
 class MetaCredential(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="meta_credentials", null=True, blank=True)
     label = models.CharField(max_length=120)
     user_name = models.CharField(max_length=255, blank=True)
     user_id = models.CharField(max_length=100, blank=True)
@@ -88,8 +90,9 @@ class SocialAccount(models.Model):
 
 
 class PublishingTarget(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="publishing_targets", null=True, blank=True)
     credential = models.ForeignKey(MetaCredential, on_delete=models.CASCADE, related_name="targets")
-    sync_key = models.CharField(max_length=255, unique=True)
+    sync_key = models.CharField(max_length=255)
     display_name = models.CharField(max_length=255)
     facebook_account = models.ForeignKey(
         SocialAccount,
@@ -129,6 +132,7 @@ class PublishingTarget(models.Model):
 
     class Meta:
         ordering = ["display_name"]
+        constraints = [models.UniqueConstraint(fields=["owner", "sync_key"], name="uniq_owner_sync_key")]
 
     def __str__(self):
         return self.display_name
