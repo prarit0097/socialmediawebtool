@@ -105,7 +105,7 @@ def evaluate_publish_readiness(
     if platform == SocialAccount.FACEBOOK and not (target.facebook_account and target.facebook_account.access_token):
         result.blocking_issues.append("Facebook Page access token is not available.")
     if platform == SocialAccount.FACEBOOK and mime_type.startswith("image/") and _file_size(file_obj) > FACEBOOK_PHOTO_MAX_BYTES:
-        result.blocking_issues.append("Facebook photo publishing is blocked because the image is over Meta's 10 MB Page Photos limit.")
+        result.warnings.append("Facebook image is over Meta's 10 MB Page Photos limit; it will be auto-compressed to a Facebook-ready JPEG before upload.")
     if platform == SocialAccount.INSTAGRAM and not (
         (target.instagram_account and target.instagram_account.access_token)
         or (target.facebook_account and target.facebook_account.access_token)

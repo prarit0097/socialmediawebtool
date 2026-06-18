@@ -12,6 +12,12 @@ INSTAGRAM_IMAGE_MAX_DIMENSION = 1440
 INSTAGRAM_MIN_ASPECT = 0.8
 INSTAGRAM_MAX_ASPECT = 1.91
 
+# Facebook Page Photos upload rejects images over 10 MB. Unlike Instagram, Facebook
+# accepts a wide aspect-ratio range, so this transform only re-encodes/downscales to
+# fit under the size cap without padding the image.
+FACEBOOK_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+FACEBOOK_IMAGE_FALLBACK_DIMENSIONS = (2048, 1600, 1280, 1080)
+
 
 def _enforce_instagram_aspect_ratio(image: Image.Image) -> Image.Image:
     """Pad image with white bars to fit within Instagram's accepted ratio range."""
@@ -76,3 +82,43 @@ def build_instagram_ready_image(raw_bytes: bytes) -> bytes:
             return data
         quality -= 5
     raise ValueError("Instagram image transform could not produce a JPEG under 8 MB.")
+
+
+def build_facebook_ready_image(raw_bytes: bytes) -> bytes:
+    """Re-encode an oversized image into a JPEG that fits under Facebook's 10 MB limit.
+
+    Preserves the original aspect ratio (no padding) and the ICC colour profile, and
+    only downscales when re-encoding alone cannot get the file under the size cap.
+    """
+    image = Image.open(BytesIO(raw_bytes))
+    image = ImageOps.exif_transpose(image)
+
+    # Extract ICC profile BEFORE convert() — convert() drops .info.
+    original_icc = image.info.get("icc_profile", b"")
+
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    for max_dimension in FACEBOOK_IMAGE_FALLBACK_DIMENSIONS:
+        working = image.copy()
+        if max(working.size) > max_dimension:
+            working.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+        quality = 95
+        while quality >= 70:
+            output = BytesIO()
+            save_kwargs = {
+                "format": "JPEG",
+                "quality": quality,
+                "optimize": True,
+                "progressive": False,
+                "subsampling": "4:4:4",
+                "exif": b"",
+            }
+            if original_icc:
+                save_kwargs["icc_profile"] = original_icc
+            working.save(output, **save_kwargs)
+            data = output.getvalue()
+            if len(data) <= FACEBOOK_IMAGE_MAX_BYTES:
+                return data
+            quality -= 5
+    raise ValueError("Facebook image transform could not produce a JPEG under 10 MB.")

@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from scheduler.models import MediaAsset, PublishingTarget
 from scheduler.services.drive import download_drive_file, download_drive_file_to_path, get_drive_file_metadata
-from scheduler.services.media_transform import build_instagram_ready_image
+from scheduler.services.media_transform import build_facebook_ready_image, build_instagram_ready_image
 from scheduler.services.proxy import is_public_base_ready
 
 
@@ -99,6 +99,13 @@ def ensure_cached_asset(target: PublishingTarget, file_obj: dict, variant: str =
 
         if variant == "instagram_image" and source_mime.startswith("image/"):
             raw_bytes = build_instagram_ready_image(download_drive_file(file_obj["id"]))
+            content_type = "image/jpeg"
+            stem = Path(public_filename).stem
+            public_filename = f"{stem}.jpg"
+            temp_path.write_bytes(raw_bytes)
+            file_size = len(raw_bytes)
+        elif variant == "facebook_image" and source_mime.startswith("image/"):
+            raw_bytes = build_facebook_ready_image(download_drive_file(file_obj["id"]))
             content_type = "image/jpeg"
             stem = Path(public_filename).stem
             public_filename = f"{stem}.jpg"

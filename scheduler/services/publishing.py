@@ -16,7 +16,7 @@ from django.utils import timezone
 from scheduler.models import PostLog, PublishingTarget, ScheduledPostRun, SocialAccount
 from scheduler.services.ai import AIServiceError, build_ai_caption_for_media
 from scheduler.services.cache import build_public_asset_url, ensure_cached_asset, get_cached_public_urls
-from scheduler.services.compliance import evaluate_publish_readiness
+from scheduler.services.compliance import FACEBOOK_PHOTO_MAX_BYTES, evaluate_publish_readiness
 from scheduler.services.diagnostics import build_rejection_diagnostics
 from scheduler.services.drive import (
     DriveConfigError,
@@ -603,6 +603,13 @@ def build_caption(target: PublishingTarget, file_obj: dict | None = None) -> str
     return caption_bytes.decode("utf-8-sig", errors="replace").strip().replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _facebook_image_needs_resize(file_obj: dict) -> bool:
+    try:
+        return int(file_obj.get("size") or 0) > FACEBOOK_PHOTO_MAX_BYTES
+    except (TypeError, ValueError):
+        return False
+
+
 def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     if not target.facebook_account:
         return ""
@@ -612,10 +619,15 @@ def _publish_to_facebook(target: PublishingTarget, file_obj: dict) -> str:
     caption = build_caption(target, file_obj=file_obj)
     mime_type = file_obj.get("mimeType", "")
 
-    # Pre-cache the asset once (avoids duplicate Drive downloads in fallback path)
+    # Pre-cache the asset once (avoids duplicate Drive downloads in fallback path).
+    # Images over Meta's 10 MB Page Photos limit are re-encoded/downscaled into a
+    # Facebook-ready JPEG; normal-sized images keep their original bytes.
+    fb_variant = "default"
+    if mime_type.startswith("image/") and _facebook_image_needs_resize(file_obj):
+        fb_variant = "facebook_image"
     asset = None
     try:
-        asset = ensure_cached_asset(target, file_obj, variant="default")
+        asset = ensure_cached_asset(target, file_obj, variant=fb_variant)
     except Exception:
         pass
 

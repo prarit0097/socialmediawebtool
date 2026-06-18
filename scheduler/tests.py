@@ -2084,7 +2084,7 @@ class ComplianceTest(TestCase):
         self.assertTrue(result.is_blocked)
         self.assertIn("Page access token", " | ".join(result.blocking_issues))
 
-    def test_facebook_photo_over_10mb_fails_preflight(self):
+    def test_facebook_photo_over_10mb_warns_instead_of_blocking(self):
         credential = MetaCredential.objects.create(label="Test", access_token="token")
         fb = credential.accounts.create(platform="facebook", external_id="fb-big", name="FB", access_token="page-token")
         target = PublishingTarget.objects.create(
@@ -2103,8 +2103,10 @@ class ComplianceTest(TestCase):
             "Caption",
         )
 
-        self.assertTrue(result.is_blocked)
-        self.assertIn("10 MB", " | ".join(result.blocking_issues))
+        # The publish path auto-compresses oversized Facebook images, so this is no
+        # longer a hard block — it only surfaces an advisory warning.
+        self.assertFalse(result.is_blocked)
+        self.assertIn("auto-compressed", " | ".join(result.warnings))
 
 
 class HealthTest(TestCase):
@@ -2422,6 +2424,35 @@ class MediaTransformTest(TestCase):
         with patch("scheduler.services.media_transform.INSTAGRAM_IMAGE_MAX_BYTES", 1):
             with self.assertRaisesMessage(ValueError, "under 8 MB"):
                 build_instagram_ready_image(source.getvalue())
+
+    def test_facebook_ready_image_compresses_under_limit_without_padding(self):
+        from scheduler.services.media_transform import build_facebook_ready_image
+
+        # Wide image whose aspect ratio is outside Instagram's range but valid for FB.
+        image = Image.new("RGB", (4000, 1000), color=(10, 120, 200))
+        source = BytesIO()
+        image.save(source, format="PNG")
+
+        output = build_facebook_ready_image(source.getvalue())
+
+        self.assertLessEqual(len(output), 10 * 1024 * 1024)
+        converted = Image.open(BytesIO(output))
+        self.assertEqual(converted.format, "JPEG")
+        # Aspect ratio is preserved (no white padding added).
+        self.assertAlmostEqual(converted.size[0] / converted.size[1], 4.0, places=1)
+
+    def test_facebook_ready_image_fails_when_jpeg_cannot_fit_under_limit(self):
+        from unittest.mock import patch
+
+        from scheduler.services.media_transform import build_facebook_ready_image
+
+        image = Image.new("RGB", (800, 800), color=(25, 50, 75))
+        source = BytesIO()
+        image.save(source, format="PNG")
+
+        with patch("scheduler.services.media_transform.FACEBOOK_IMAGE_MAX_BYTES", 1):
+            with self.assertRaisesMessage(ValueError, "under 10 MB"):
+                build_facebook_ready_image(source.getvalue())
 
 
 class MediaCacheTest(TestCase):
@@ -3499,6 +3530,67 @@ class FacebookPublishTest(TestCase):
         payload = post_multipart_mock.call_args.args[2]
         self.assertNotIn("title", payload)
         self.assertEqual(payload["description"], "Human caption")
+
+    def test_facebook_oversized_image_uses_facebook_image_variant(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:bigimg",
+            display_name="FB Big Image",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            default_caption="Human caption",
+        )
+        file_obj = {
+            "id": "file1",
+            "name": "POST67.png",
+            "mimeType": "image/png",
+            "size": str(10 * 1024 * 1024 + 1),
+        }
+
+        with patch("scheduler.services.publishing.ensure_cached_asset") as ensure_asset_mock, patch(
+            "scheduler.services.publishing._graph_post_multipart",
+            return_value={"id": "photo-1"},
+        ):
+            asset = ensure_asset_mock.return_value
+            asset.local_path = __file__
+            asset.public_filename = "POST67.jpg"
+            asset.content_type = "image/jpeg"
+            result = _publish_to_facebook(target, file_obj)
+
+        self.assertEqual(result, "photo-1")
+        self.assertEqual(ensure_asset_mock.call_args.kwargs.get("variant"), "facebook_image")
+
+    def test_facebook_normal_image_uses_default_variant(self):
+        from unittest.mock import patch
+
+        credential = MetaCredential.objects.create(label="Test", access_token="token")
+        fb = credential.accounts.create(platform="facebook", external_id="fb1", name="FB", access_token="page-token")
+        target = PublishingTarget.objects.create(
+            credential=credential,
+            sync_key="fb:normalimg",
+            display_name="FB Normal Image",
+            facebook_account=fb,
+            drive_folder_id="folder",
+            default_caption="Human caption",
+        )
+        file_obj = {"id": "file1", "name": "POST1.jpeg", "mimeType": "image/jpeg", "size": "500000"}
+
+        with patch("scheduler.services.publishing.ensure_cached_asset") as ensure_asset_mock, patch(
+            "scheduler.services.publishing._graph_post_multipart",
+            return_value={"id": "photo-2"},
+        ):
+            asset = ensure_asset_mock.return_value
+            asset.local_path = __file__
+            asset.public_filename = "POST1.jpeg"
+            asset.content_type = "image/jpeg"
+            result = _publish_to_facebook(target, file_obj)
+
+        self.assertEqual(result, "photo-2")
+        self.assertEqual(ensure_asset_mock.call_args.kwargs.get("variant"), "default")
 
 
 class PostingTimesFormTest(TestCase):

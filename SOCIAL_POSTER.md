@@ -290,6 +290,11 @@ systemctl status socialposter-scheduler.service --no-pager
 - Multi-user login ab live hai: har user apna isolated workspace dekhta hai, login proper `/login/` page se hota hai, naye users `create_app_user` command se banaye jaate hain, aur existing `admin` ka data + scheduling migration se preserve rehti hai (scheduler global). Telegram + AI abhi global hain.
 
 ## Last Update
+2026-06-18
+- **Facebook >10 MB image auto-compress add hua (Riya Arora jaisa FB block fix).** Pehle agar koi image Meta ke 10 MB Page Photos limit se bada hota tha to Facebook publish hard-block ho jata tha (IG success ho jata, FB `failed`). Ab publish path us image ko ek Facebook-ready JPEG me re-encode/downscale karke (aspect ratio preserve, ICC profile preserve, no padding) 10 MB ke andar la deta hai aur normally upload kar deta hai.
+  - Naya `build_facebook_ready_image()` transform (`media_transform.py`), naya `facebook_image` cache variant (`cache.py`), aur `_publish_to_facebook` ab sirf oversized images ke liye ye variant use karta hai — normal-size images apne original bytes/quality ke saath hi jaate hain.
+  - Compliance ab oversized FB image par hard-block nahi karti; ab ye sirf advisory warning hai ("will be auto-compressed").
+  - Tests 127 se badhkar **131** hue: FB-ready transform under-limit + fail-closed, oversized image `facebook_image` variant select, normal image `default` variant, aur updated compliance warning coverage.
 2026-03-21
 - `SOCIAL_POSTER.md` ko beginner-friendly format me rewrite kiya gaya so that project ko easily samjha ja sake.
 - Professional `README.md` add ki gayi for GitHub repo overview, setup, commands, and environment configuration.
