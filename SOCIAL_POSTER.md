@@ -474,3 +474,7 @@ systemctl status socialposter-scheduler.service --no-pager
 - VPS deploy step: code pull karne ke baad `./.venv/bin/python manage.py migrate` zaroor chalayein taaki owner columns aur admin seeding apply ho jaye. (Agar VPS par pehle se koi `admin` Django user hai jiska password alag hai, to migration uska password reset nahi karti — us case me `manage.py changepassword admin` chala lein.)
 - VPS par live deploy verify hua: `migrate` ne `0007` + `0008` apply kiye aur `admin` user ko 2 credentials + 31 targets assign kiye; `check` clean, 127 tests OK, dono services restart hue. Existing scheduling untouched.
 - Naya `Multi-User Posting — Kya Dhyaan Rakhna` section add kiya gaya: confirm kiya gaya ki software level par cross-user koi collapse nahi (sab per-target/per-credential scoped), aur same physical page par do users ke posting ke real-world dhyaan-points (Meta shared quota, same-content double-post, global Telegram report, shared per-tick run cap) document kiye gaye.
+
+## Documentation update — 2026-11-12
+
+Added the developer portfolio attribution to README.md. This documentation-only update preserves the existing setup, posting, reporting and operational instructions.
