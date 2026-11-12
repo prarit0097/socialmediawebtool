@@ -340,3 +340,7 @@ Then restart Django so `PUBLIC_APP_BASE_URL` is reloaded.
 ## Repository Rules
 - after every meaningful change, update `SOCIAL_POSTER.md`
 - after every meaningful change, push the latest code to GitHub
+
+## Maintainer
+
+Developer portfolio: [Prarit Sidana](https://praritsidana.com/).
